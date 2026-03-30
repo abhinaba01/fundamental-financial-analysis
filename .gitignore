@@ -1,0 +1,64 @@
+# ── Virtual Environment ────────────────────────────────────────────────
+.venv/
+venv/
+env/
+
+# ── Python Cache ───────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Jupyter Notebooks ──────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ── Environment Variables & Secrets ───────────────────────────────────
+.env
+.env.local
+*.env
+secrets.yaml
+
+# ── Raw & Processed Data (often too large for Git) ────────────────────
+data/raw/
+data/processed/
+data/vector_store/
+
+# ── Model Weights & Checkpoints (can be GBs in size) ─────────────────
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+models/
+
+# ── ChromaDB Local Store ───────────────────────────────────────────────
+chroma/
+*.chroma
+
+# ── VS Code ────────────────────────────────────────────────────────────
+.vscode/
+*.code-workspace
+
+# ── OS Junk ────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Logs & Temp Files ─────────────────────────────────────────────────
+*.log
+logs/
+tmp/
+temp/
+
+# ── Build & Distribution ──────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# ── Testing & Coverage ────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
