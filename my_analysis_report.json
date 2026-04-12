@@ -1,0 +1,76 @@
+{
+    "metadata": {
+        "generated_at": "2026-04-12T08:16:37.474927",
+        "document_id": "5db8a82c-96b7-48e4-a041-ea2a3df7f84e",
+        "ticker": null,
+        "doc_type": "unknown",
+        "fiscal_period": null,
+        "query": "What is the revenue growth?"
+    },
+    "retrieval": {
+        "chunks_retrieved": 0,
+        "average_similarity": 0.0,
+        "retries_performed": 2,
+        "chunks": []
+    },
+    "named_entities": {
+        "total_entities": 4,
+        "entity_types": {
+            "ORG": 2,
+            "MISC": 2
+        },
+        "sample_entities": [
+            {
+                "entity_group": "ORG",
+                "score": 0.9994493722915649,
+                "word": "Apple Inc",
+                "start": 0,
+                "end": 9
+            },
+            {
+                "entity_group": "MISC",
+                "score": 0.970639705657959,
+                "word": "iPhone",
+                "start": 334,
+                "end": 340
+            },
+            {
+                "entity_group": "ORG",
+                "score": 0.9989203214645386,
+                "word": "Apple",
+                "start": 378,
+                "end": 383
+            },
+            {
+                "entity_group": "MISC",
+                "score": 0.9997749924659729,
+                "word": "Chinese",
+                "start": 420,
+                "end": 427
+            }
+        ],
+        "unique_entity_types": 2
+    },
+    "sentiment_analysis": {
+        "overall_sentiment": "positive",
+        "confidence_score": 0.27152240702084135,
+        "sentiment_distribution": {
+            "positive": 0.0,
+            "neutral": 0.0,
+            "negative": 1.0
+        },
+        "tone_analysis": {},
+        "is_positive": false
+    },
+    "financial_metrics": {
+        "total_kpis": 0,
+        "extracted_kpis": {},
+        "calculated_kpis": {},
+        "kpi_count": 0
+    },
+    "reasoning": {
+        "chain_of_thought": "No relevant chunks found in document.",
+        "final_answer": "Unable to answer based on available documents."
+    },
+    "summary": "Identified 4 entities across 2 categories. Document has positive sentiment (score: 0.272). Answer: Unable to answer based on available documents."
+}

@@ -3,7 +3,7 @@
 
 agents:
   ner:
-    model: "nlpaueb/sec-bert-base"
+    model: "dslim/bert-base-NER"
     description: "Named Entity Recognition using SEC-specific BERT"
     task: "ner"
     aggregation_strategy: "simple"

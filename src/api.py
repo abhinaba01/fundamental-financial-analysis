@@ -15,13 +15,28 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
 
 from src.main import run_analysis
 from src.utils.logger import get_logger
 
+try:
+    import numpy as np
+except ImportError:  # pragma: no cover
+    np = None
+
 logger = get_logger(__name__)
 app = FastAPI(title="Financial Fundamentals Analysis API")
+
+
+def _serialize_response(content: Any) -> Any:
+    """Convert non-native JSON values to JSON-safe Python types."""
+    custom_encoders = {}
+    if np is not None:
+        custom_encoders[np.generic] = lambda value: value.item()
+
+    return jsonable_encoder(content, custom_encoder=custom_encoders)
 
 
 @app.post("/analyze")
@@ -46,7 +61,7 @@ async def analyze_document(
 
         try:
             report = run_analysis(document_path=temp_path, query=query, use_gpu=use_gpu)
-            return JSONResponse(content=report)
+            return JSONResponse(content=_serialize_response(report))
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
         except Exception as exc:

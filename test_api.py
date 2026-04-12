@@ -1,21 +1,36 @@
 import requests
+import json
 
-# Test with small file for faster results
 url = 'http://127.0.0.1:8000/analyze'
-files = {'document': open('test_small.txt', 'rb')}  # Small test file
-data = {'query': 'What is the revenue growth?', 'use_gpu': 'false'}
+
+# 1. Update the filename to match your downloaded Apple 10-K
+files = {'document': open('medium_test.txt', 'rb')} 
+
+# 2. Update the query to something more specific for a 10-K
+# and set use_gpu to 'true' if your Docker setup supports it
+data = {
+    'query': 'What are the primary risk factors identified for the next fiscal year?', 
+    'use_gpu': 'false' 
+}
 
 try:
-    print("Testing API with small file (should be faster)...")
-    response = requests.post(url, files=files, data=data, timeout=300)
+    print("Testing API with medium test (this will take several minutes)...")
+    # 3. Increase timeout for large documents if necessary
+    response = requests.post(url, files=files, data=data, timeout=600)
+    
     print(f'Status: {response.status_code}')
     if response.status_code == 200:
-        print('✅ Success! API is working.')
-        print('Response preview:', response.text[:500] + '...')
+        print('✅ Success! Analysis complete.')
+        
+        full_report = response.json()
+        with open('apple_10k_analysis.json', 'w') as f:
+            json.dump(full_report, f, indent=4)
+            
+        print('📄 Full analysis saved to "apple_10k_analysis.json"')
     else:
         print('❌ Error:', response.text)
+        
 except requests.exceptions.Timeout:
-    print('⏰ Request timed out - analysis takes time even with small files')
-    print('💡 This is normal! The API is working, just processing through ML models')
+    print('⏰ Request timed out - 10-K files take significant time to process.')
 except Exception as e:
     print('❌ Error:', e)

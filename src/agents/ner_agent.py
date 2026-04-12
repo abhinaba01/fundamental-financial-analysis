@@ -26,7 +26,7 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Model configuration
-MODEL_NAME = "nlpaueb/sec-bert-base"
+MODEL_NAME = "dslim/bert-base-NER"
 
 
 class NERAgent:
