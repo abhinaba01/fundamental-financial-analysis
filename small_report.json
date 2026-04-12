@@ -1,0 +1,118 @@
+{
+  "metadata": {
+    "generated_at": "2026-04-05T02:45:05.667911",
+    "document_id": "f8757098-d3e2-403d-b69d-14e7f4008fd5",
+    "ticker": "TEST",
+    "doc_type": "unknown",
+    "fiscal_period": null,
+    "query": "What is the revenue growth?"
+  },
+  "retrieval": {
+    "chunks_retrieved": 0,
+    "average_similarity": 0.0,
+    "retries_performed": 2,
+    "chunks": []
+  },
+  "named_entities": {
+    "total_entities": 60,
+    "entity_types": {
+      "LABEL_1": 30,
+      "LABEL_0": 30
+    },
+    "sample_entities": [
+      {
+        "entity_group": "LABEL_1",
+        "score": "0.5706687",
+        "word": "apple",
+        "start": 0,
+        "end": 5
+      },
+      {
+        "entity_group": "LABEL_0",
+        "score": "0.55095917",
+        "word": "inc",
+        "start": 6,
+        "end": 9
+      },
+      {
+        "entity_group": "LABEL_1",
+        "score": "0.58707994",
+        "word": ". reported revenue",
+        "start": 9,
+        "end": 27
+      },
+      {
+        "entity_group": "LABEL_0",
+        "score": "0.5429997",
+        "word": "of $ 119",
+        "start": 28,
+        "end": 35
+      },
+      {
+        "entity_group": "LABEL_1",
+        "score": "0.5402518",
+        "word": ".",
+        "start": 35,
+        "end": 36
+      },
+      {
+        "entity_group": "LABEL_0",
+        "score": "0.51653016",
+        "word": "60",
+        "start": 36,
+        "end": 38
+      },
+      {
+        "entity_group": "LABEL_1",
+        "score": "0.57161754",
+        "word": "##bfor",
+        "start": 38,
+        "end": 42
+      },
+      {
+        "entity_group": "LABEL_0",
+        "score": "0.5265261",
+        "word": "q1",
+        "start": 43,
+        "end": 45
+      },
+      {
+        "entity_group": "LABEL_1",
+        "score": "0.5980154",
+        "word": "2024,",
+        "start": 46,
+        "end": 51
+      },
+      {
+        "entity_group": "LABEL_0",
+        "score": "0.6159132",
+        "word": "representing",
+        "start": 52,
+        "end": 64
+      }
+    ],
+    "unique_entity_types": 2
+  },
+  "sentiment_analysis": {
+    "overall_sentiment": "positive",
+    "confidence_score": 0.2715223857334682,
+    "sentiment_distribution": {
+      "positive": 0.0,
+      "neutral": 0.0,
+      "negative": 1.0
+    },
+    "tone_analysis": {},
+    "is_positive": false
+  },
+  "financial_metrics": {
+    "total_kpis": 0,
+    "extracted_kpis": {},
+    "calculated_kpis": {},
+    "kpi_count": 0
+  },
+  "reasoning": {
+    "chain_of_thought": "No relevant chunks found in document.",
+    "final_answer": "Unable to answer based on available documents."
+  },
+  "summary": "Identified 60 entities across 2 categories. Document has positive sentiment (score: 0.272). Answer: Unable to answer based on available documents."
+}

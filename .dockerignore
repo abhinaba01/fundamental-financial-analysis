@@ -1,0 +1,16 @@
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+logs/
+logs/*
+data/vector_store/
+.git
+.gitignore
+.DS_Store
+.idea
+.vscode

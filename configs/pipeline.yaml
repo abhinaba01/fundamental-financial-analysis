@@ -1,0 +1,89 @@
+# Preprocessing Pipeline Configuration
+# Defines settings for document parsing, cleaning, chunking, and embedding
+
+pipeline:
+  name: "Financial Fundamentals Analysis Pipeline"
+  version: "1.0.0"
+
+  parser:
+    description: "Document parsing stage"
+    supported_formats:
+      - "pdf"
+      - "html"
+      - "txt"
+    extract_tables: true
+    extract_metadata: true
+    sec_section_mapping:
+      "Item 1A": "risk_factors"
+      "Item 7": "mda"
+      "Item 8": "financial_statements"
+    earnings_call_detection: true
+
+  cleaner:
+    description: "Text normalization and cleaning stage"
+    remove_html_entities: true
+    unicode_normalization: true
+    financial_notation_normalization: true
+    remove_boilerplate_patterns: true
+    collapse_whitespace: true
+
+  chunker:
+    description: "Semantic chunking with section preservation"
+    max_tokens_per_chunk: 512
+    overlap_tokens: 64
+    encoding_name: "cl100k_base"  # tiktoken encoding
+    sentencizer: "spacy:en_core_web_sm"
+    section_aware_chunking: true
+    safe_split_points: "sentence_boundaries"  # spaCy sentencizer
+    section_type_mapping:
+      "risk_factors": "RISK_FACTORS"
+      "mda": "MDA"
+      "financial_statements": "FINANCIALS"
+      "earnings_call": "EARNINGS_CALL"
+
+  embedder:
+    description: "Embedding and vector store indexing"
+    model: "BAAI/bge-large-en-v1.5"
+    embedding_dimension: 1024
+    batch_size: 32
+    normalize_embeddings: true
+    device: "cuda"  # or "cpu"
+    vector_store:
+      backend: "chromadb"
+      persist_directory: "data/vector_store/"
+      collection_name: "financial_docs"
+      hnsw_space: "cosine"
+      hnsw_max_connections: 32
+    metadata_fields:
+      - "doc_id"
+      - "ticker"
+      - "chunk_type"
+      - "fiscal_period"
+      - "page_number"
+      - "section"
+
+# Data paths
+data:
+  raw_documents: "data/raw/"
+  processed_documents: "data/processed/"
+  vector_store: "data/vector_store/"
+  cache_dir: ".cache/"
+
+# Logging
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  handlers:
+    - type: "stream"
+      level: "INFO"
+    - type: "file"
+      path: "logs/pipeline.log"
+      level: "DEBUG"
+
+# Performance tuning
+performance:
+  num_workers: 4
+  batch_processing: true
+  cache_embeddings: true
+  use_gpu: true
+  gpu_memory_fraction: 0.8

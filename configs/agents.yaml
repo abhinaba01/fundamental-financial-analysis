@@ -1,0 +1,83 @@
+# Agent Configuration
+# Defines model selections, prompts, and parameters for each agent
+
+agents:
+  ner:
+    model: "nlpaueb/sec-bert-base"
+    description: "Named Entity Recognition using SEC-specific BERT"
+    task: "ner"
+    aggregation_strategy: "simple"
+    device: "cuda"  # or "cpu"
+    max_length: 512
+    batch_size: 8
+
+  sentiment:
+    primary_model: "ProsusAI/finbert"
+    secondary_model: "yiyanghkust/finbert-tone"
+    description: "Sentiment analysis with tone detection"
+    task: "sentiment-analysis"
+    device: "cuda"  # or "cpu"
+    labels: ["negative", "neutral", "positive"]
+    threshold_positive: 0.2
+    threshold_negative: -0.2
+
+  kpi:
+    model: "Qwen2.5-7B-Instruct"
+    description: "KPI extraction and financial calculations"
+    framework: "vLLM"  # or "ollama"
+    device: "cuda"
+    temperature: 0.0  # Deterministic for calculations
+    top_p: 0.95
+    max_tokens: 256
+    kpi_types:
+      - revenue
+      - gross_margin
+      - operating_income
+      - net_income
+      - eps
+      - ebitda
+      - roa
+      - roe
+
+  rag:
+    retrieval_model: "BAAI/bge-large-en-v1.5"
+    generation_model: "gpt-4o"
+    description: "Retrieval-Augmented Generation with chain-of-thought"
+    retrieval:
+      top_k: 5
+      similarity_threshold: 0.75
+      batch_size: 32
+      device: "cuda"  # or "cpu"
+    generation:
+      temperature: 0.7
+      max_tokens: 1024
+      api_key: "${OPENAI_API_KEY}"
+      timeout: 60
+    re_query:
+      min_chunks_threshold: 3
+      max_retries: 2
+
+  synthesis:
+    description: "Report assembly from all agent outputs"
+    output_format: "json"  # or "markdown", "html"
+    include_evidence: true
+    include_confidence: true
+
+# Prompts for agents (optional, can be overridden in code)
+prompts:
+  rag_system: |
+    You are a financial analysis expert. Analyze the retrieved document sections carefully.
+    Show your reasoning step-by-step before providing the final answer.
+    Always cite the document sections used.
+
+  nerdocstring_extraction: |
+    Extract named entities related to financial reporting.
+    Focus on: companies, people, financial regulations, contract items.
+
+  sentiment_analysis: |
+    Analyze the sentiment of financial statements and disclosures.
+    Consider context: is this optimistic or pessimistic language?
+
+  kpi_extraction: |
+    Extract numerical financial metrics and key performance indicators.
+    Calculate derived metrics using safe arithmetic operations.
