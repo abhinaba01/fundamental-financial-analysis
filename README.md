@@ -189,23 +189,122 @@ export OPENAI_API_KEY="sk-..."
 
 ## Evaluation
 
-Run benchmark evaluations against standard datasets:
+Each agent has a benchmark harness under `evaluation/`. All four expose the same CLI:
 
 ```bash
-# NER evaluation (FiNER-139)
-python -m evaluation.eval_ner --test-set data/eval/finer139_test.json
-
-# Sentiment evaluation (Financial PhraseBank)
-python -m evaluation.eval_sentiment --test-set data/eval/fpb_test.json
-
-# RAG evaluation (FinanceBench)
-python -m evaluation.eval_rag --test-set data/eval/financebench_test.json
-
-# KPI evaluation (FinQA)
-python -m evaluation.eval_kpi --test-set data/eval/finqa_test.json
+python -m evaluation.eval_ner --test-set data/eval/ner_example.json
 ```
 
+```bash
+python -m evaluation.eval_sentiment --test-set data/eval/sentiment_example.json
+```
+
+```bash
+python -m evaluation.eval_rag --test-set data/eval/rag_example.json
+```
+
+```bash
+python -m evaluation.eval_kpi --test-set data/eval/kpi_example.json
+```
+
+The files in `data/eval/` are small worked examples of each format, not the real
+test splits. Point `--test-set` at a converted FiNER-139 / Financial PhraseBank /
+FinanceBench / FinQA split to reproduce the benchmark numbers below.
+
+### Flags
+
+| Flag | Effect |
+|------|--------|
+| `--test-set PATH` | JSON test set (required) |
+| `--output PATH` | Write the computed metrics to a JSON file |
+| `--limit N` | Score only the first N samples |
+| `--benchmark` | Also print the published reference numbers for the dataset |
+| `--run-agent` | Load the agent and generate predictions, instead of reading them from the test set |
+
+Metrics print to stdout; `--output` additionally writes them as JSON. Exit code is
+`1` with a one-line message if the test set is missing, malformed, or empty.
+
+### Test-set format
+
+Every module accepts three container shapes — a bare list of samples, `{"samples": [...]}`,
+or a single sample object. Sample keys per module:
+
+```jsonc
+// eval_ner.py    "entities" aliases "references"
+{"text": "...", "references": [{"word": "Apple Inc.", "entity": "ORG"}],
+                "predictions": [{"word": "Apple Inc.", "entity": "ORG"}]}
+
+// eval_sentiment.py    "label" aliases "sentiment"; classes: positive|neutral|negative
+{"text": "...", "sentiment": "positive", "prediction": "positive"}
+
+// eval_kpi.py    "gold_kpis" aliases "reference_kpis"
+{"text": "...", "reference_kpis": {"revenue": 383285.0},
+                "extracted_kpis": {"revenue": 383285.0},
+                "calculation_steps": [{"operands": [169148, 383285], "operator": "/",
+                                       "expected_result": 0.4413}]}
+
+// eval_rag.py    chunks may be strings or {"chunk_id", "text"} objects
+{"question": "...", "answer": "...", "gold_chunks": [...],
+                    "retrieved_chunks": [...], "generated_answer": "..."}
+```
+
+The prediction fields (`predictions`, `prediction`, `extracted_kpis`,
+`retrieved_chunks`/`generated_answer`) are optional. Omit them and pass
+`--run-agent` to generate predictions live; omit them without `--run-agent` and
+those samples score as misses, with a warning.
+
+### Live agent mode
+
+`--run-agent` loads real models, so it has real prerequisites:
+
+- **NER / Sentiment / KPI** — run standalone. NER and Sentiment download their
+  HuggingFace checkpoints on first use.
+- **RAG** — retrieves from the persistent ChromaDB collection, so the corpus must
+  already be indexed (run `python -m src.main` once) and `OPENAI_API_KEY` must be
+  set. Without those, score a test set that already carries `retrieved_chunks`
+  and `generated_answer`.
+
+Scoring is macro-averaged across samples for `eval_kpi` and `eval_rag`; `eval_ner`
+pools entities across samples (namespaced per sample so identical surface forms in
+different samples cannot cross-match).
+
+### Measured Results (this repo)
+
+Test suite: **19/19 passed** (`pytest tests/`) — 13 smoke tests plus 6 regression
+tests added for bugs found and fixed during a pipeline audit (KPI regex group
+misalignment, gross-margin/dollar-amount conflation, smart-quote normalization,
+financial-notation word-boundary corruption, retrieved-chunk id/type coercion,
+and the `EmbeddingPipeline` constructor signature).
+
+Evaluation CLIs run against the worked examples in `data/eval/` (2-6 samples
+each — sanity checks that the harness and agents work end-to-end, **not** a
+reproduction of the published benchmarks below, which are measured on the full
+external datasets):
+
+| Module | Mode | Result |
+|--------|------|--------|
+| `eval_ner` | `--run-agent` (live `dslim/bert-base-NER`) | Precision 0.44, Recall 0.67, F1 0.53 |
+| `eval_sentiment` | `--run-agent` (live `ProsusAI/finbert`) | Accuracy 1.00, Macro-F1 1.00 |
+| `eval_kpi` | `--run-agent` (live regex `KPIAgent`) | Numeric accuracy 0.83, Extraction recall 0.83 |
+| `eval_rag` | offline (hand-scored `retrieved_chunks`/`generated_answer`) | EM 0.50, ROUGE-L 0.50, Hit@5 1.00 |
+
+Two things the live NER run surfaces directly: it scores 0 on the
+`STOCK_EXCHANGE` entity type because `dslim/bert-base-NER` is a general-purpose
+NER model with no such label — the finance-specific `sec-bert-base` cited in
+the benchmark table below and in the architecture diagram is not what
+`src/agents/ner_agent.py` actually loads (`configs/agents.yaml` already
+reflects the `dslim` model; the architecture description and benchmark table
+don't). Similarly, `eval_kpi`'s live run uses the regex-based `KPIAgent` in
+`src/agents/kpi_agent.py`, not the `Qwen2.5-7B` LLM described in the benchmark
+table. Reproducing the benchmark table's numbers requires actually wiring up
+those models, not just pointing `--test-set` at the real datasets.
+
 ## Performance Benchmarks
+
+Published reference numbers for the datasets and models named — **not**
+measurements of this repo's current agents. See "Measured Results" above for
+what the code as it stands actually produces, and the note above the table
+for where the two diverge (NER and KPI use different models than named here).
 
 | Component | Model | Benchmark | Expected |
 |-----------|-------|-----------|----------|
@@ -255,12 +354,15 @@ python -m src.main --cpu --document file.pdf --query "..."
 ```
 
 ### Re-query Loops
-Check `configs/pipeline.yaml` for retrieval thresholds:
-```yaml
-retrieval:
-  similarity_threshold: 0.75  # Increase to reduce re-queries
-  min_chunks_threshold: 3     # Reduce to accept fewer chunks
-```
+`configs/*.yaml` are reference documentation only — they are not loaded at
+runtime. The active thresholds are the `SIMILARITY_THRESHOLD` and
+`MIN_CHUNKS_THRESHOLD` constants at the top of `src/graph/edges.py` and
+`src/agents/rag_agent.py` (keep both files in sync if you change them).
+
+The default `SIMILARITY_THRESHOLD` is `0.5`. BAAI/bge-large-en-v1.5 cosine
+similarities for genuinely relevant chunks typically land around 0.5-0.65,
+not near 1.0, so raising this much above ~0.65 will send most queries into
+the retry loop regardless of retrieval quality.
 
 ### Slow Embedding
 ```bash
@@ -292,6 +394,7 @@ python -m src.main --batch-size 8 --document file.pdf --query "..."
 │   │   └── logger.py          # Logging utility
 │   └── main.py                # Entry point
 ├── evaluation/
+│   ├── _cli.py                # Shared CLI plumbing / test-set loading
 │   ├── eval_ner.py            # FiNER-139 evaluation
 │   ├── eval_sentiment.py       # Financial PhraseBank
 │   ├── eval_rag.py            # FinanceBench
@@ -304,6 +407,7 @@ python -m src.main --batch-size 8 --document file.pdf --query "..."
 └── data/
     ├── raw/                   # Input documents
     ├── processed/             # Intermediate
+    ├── eval/                  # Example test sets for the eval CLIs
     └── vector_store/          # ChromaDB persistence
 ```
 

@@ -24,7 +24,7 @@ except ImportError:
     np = None
     SentenceTransformer = None
 
-from src.preprocessing.document import DocumentChunk, ParsedDocument
+from src.preprocessing.document import ChunkType, DocumentChunk, ParsedDocument
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -34,6 +34,16 @@ MODEL_NAME = "BAAI/bge-large-en-v1.5"
 BATCH_SIZE = 32
 COLLECTION_NAME = "financial_docs"
 VECTOR_STORE_PATH = Path("data/vector_store")
+
+
+def _to_chunk_type(value) -> ChunkType:
+    """Coerce a ChromaDB metadata value back into a ChunkType enum."""
+    if isinstance(value, ChunkType):
+        return value
+    try:
+        return ChunkType(value)
+    except ValueError:
+        return ChunkType.GENERAL
 
 
 class EmbeddingPipeline:
@@ -162,10 +172,8 @@ class EmbeddingPipeline:
 
         # Concatenate all batches
         if embeddings:
-            import numpy as np
             all_embeddings = np.vstack(embeddings)
         else:
-            import numpy as np
             all_embeddings = np.array([])
 
         return all_embeddings
@@ -204,7 +212,8 @@ class EmbeddingPipeline:
                     "page_number": chunk.page_number or -1,
                 }
                 metadata.update(chunk.metadata or {})
-                metadatas.append(metadata)
+                # ChromaDB rejects None metadata values
+                metadatas.append({k: v for k, v in metadata.items() if v is not None})
 
             if ids:
                 self.collection.upsert(
@@ -226,7 +235,7 @@ class EmbeddingPipeline:
         query: str,
         top_k: int = 5,
         filter_ticker: str | None = None,
-        similarity_threshold: float = 0.75,
+        similarity_threshold: float = 0.5,
     ) -> list[DocumentChunk]:
         """
         Retrieve top-k most similar chunks for a query.
@@ -268,7 +277,8 @@ class EmbeddingPipeline:
             retrieved_chunks = []
 
             if results and results["documents"]:
-                for doc, distance, metadata in zip(
+                for chunk_id, doc, distance, metadata in zip(
+                    results["ids"][0],
                     results["documents"][0],
                     results["distances"][0],
                     results["metadatas"][0],
@@ -278,11 +288,12 @@ class EmbeddingPipeline:
                     similarity = 1 - distance
 
                     if similarity >= similarity_threshold:
+                        page_number = metadata.get("page_number", -1)
                         chunk = DocumentChunk(
-                            chunk_id=metadata.get("chunk_id", "unknown"),
+                            chunk_id=chunk_id,
                             text=doc,
-                            chunk_type=metadata.get("chunk_type", "general"),
-                            page_number=metadata.get("page_number"),
+                            chunk_type=_to_chunk_type(metadata.get("chunk_type")),
+                            page_number=None if page_number == -1 else page_number,
                             metadata={
                                 "similarity": float(similarity),
                                 **metadata,

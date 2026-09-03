@@ -43,9 +43,13 @@ def _serialize_response(content: Any) -> Any:
 async def analyze_document(
     query: str = Form(...),
     document: UploadFile = File(...),
-    use_gpu: bool = Form(False),
+    use_gpu: bool | None = Form(None),
 ) -> Any:
-    """Analyze an uploaded financial document and return a structured report."""
+    """Analyze an uploaded financial document and return a structured report.
+
+    use_gpu defaults to None, which auto-detects via torch.cuda.is_available()
+    (see src.main.run_analysis) - omit the form field to let the server decide.
+    """
     if not document.filename:
         raise HTTPException(status_code=400, detail="Document filename is required.")
 

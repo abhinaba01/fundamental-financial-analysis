@@ -93,6 +93,7 @@ class SynthesisAgent:
                 "chain_of_thought": cot_reasoning,
                 "final_answer": final_answer,
             },
+            "key_findings": self._build_findings(sentiment_results, ner_results, kpi_results),
             "summary": self._generate_summary(
                 ner_results, sentiment_results, kpi_results, final_answer
             ),
@@ -118,7 +119,8 @@ class SynthesisAgent:
                     "text": chunk.text[:200] + "..."
                     if len(chunk.text) > 200
                     else chunk.text,
-                    "section": chunk.section,
+                    "chunk_id": chunk.chunk_id,
+                    "section": chunk.metadata.get("section", "general"),
                     "chunk_type": chunk.chunk_type.value
                     if hasattr(chunk.chunk_type, "value")
                     else str(chunk.chunk_type),
@@ -253,61 +255,6 @@ class SynthesisAgent:
             summary_parts.append(f"Answer: {answer_preview}")
 
         return " ".join(summary_parts) if summary_parts else "Analysis incomplete."
-
-    def _build_kpi_section(
-        self, kpi_results: dict[str, Any]
-    ) -> dict[str, Any]:
-        """
-        Build KPI section.
-
-        Args:
-            kpi_results: KPI extraction results
-
-        Returns:
-            KPI section dictionary
-        """
-        extracted = kpi_results.get("extracted_kpis", {})
-        calculated = kpi_results.get("calculated_kpis", {})
-
-        return {
-            "total_kpis": kpi_results.get("total_kpis", 0),
-            "extracted_metrics": extracted,
-            "calculated_metrics": calculated,
-        }
-
-    def _build_rag_section(
-        self,
-        retrieved_chunks,
-        cot_reasoning: str,
-        final_answer: str,
-    ) -> dict[str, Any]:
-        """
-        Build RAG/Q&A section.
-
-        Args:
-            retrieved_chunks: Retrieved document chunks
-            cot_reasoning: Chain-of-thought reasoning
-            final_answer: Generated answer
-
-        Returns:
-            RAG section dictionary
-        """
-        chunk_summary = [
-            {
-                "id": chunk.chunk_id,
-                "type": chunk.chunk_type.value,
-                "similarity": chunk.metadata.get("similarity", 0.0),
-                "preview": chunk.text[:200],
-            }
-            for chunk in retrieved_chunks
-        ]
-
-        return {
-            "chunks_retrieved": len(retrieved_chunks),
-            "chunk_summary": chunk_summary,
-            "reasoning": cot_reasoning,
-            "answer": final_answer,
-        }
 
     def _build_findings(
         self,

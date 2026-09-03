@@ -15,6 +15,9 @@ import argparse
 import json
 from pathlib import Path
 
+import torch
+from dotenv import load_dotenv
+
 from src.preprocessing.parser import DocumentParser
 from src.preprocessing.cleaner import DocumentCleaner
 from src.preprocessing.chunker import SemanticChunker
@@ -22,13 +25,15 @@ from src.preprocessing.embedder import EmbeddingPipeline
 from src.graph.builder import create_default_pipeline
 from src.utils.logger import get_logger
 
+load_dotenv()
+
 logger = get_logger(__name__)
 
 
 def run_analysis(
     document_path: str | Path,
     query: str,
-    use_gpu: bool = True,
+    use_gpu: bool | None = None,
 ) -> dict:
     """
     Run complete financial analysis pipeline on a document.
@@ -36,7 +41,9 @@ def run_analysis(
     Args:
         document_path: Path to PDF/HTML/TXT document
         query: User query about the document
-        use_gpu: Whether to use GPU for embeddings
+        use_gpu: Whether to use GPU for embeddings, NER, and sentiment models.
+            None (default) auto-detects via torch.cuda.is_available() - CPU-only
+            laptops and GPU runtimes (e.g. Colab) both work with no flag needed.
 
     Returns:
         Structured report with all analysis results
@@ -45,6 +52,11 @@ def run_analysis(
 
     if not document_path.exists():
         raise FileNotFoundError(f"Document not found: {document_path}")
+
+    if use_gpu is None:
+        use_gpu = torch.cuda.is_available()
+    device = "cuda" if use_gpu else "cpu"
+    logger.info(f"Using device: {device}")
 
     logger.info(f"Starting analysis pipeline for: {document_path}")
 
@@ -68,13 +80,13 @@ def run_analysis(
 
     # Stage 4: Embed
     logger.info("Stage 4: Embedding and indexing...")
-    embedder = EmbeddingPipeline(device="cuda" if use_gpu else "cpu")
+    embedder = EmbeddingPipeline(device=device)
     embedder.embed_and_index(chunked_doc)
     logger.info(f"Indexed: {len(chunked_doc.chunks)} embeddings")
 
     # Stage 5: Build and run analysis pipeline
     logger.info("Stage 5: Running analysis pipeline...")
-    graph = create_default_pipeline(embedding_pipeline=embedder)
+    graph = create_default_pipeline(embedding_pipeline=embedder, device=device)
 
     # Initialize state
     initial_state = {
@@ -121,19 +133,33 @@ def main():
         default="report.json",
         help="Output file for report (default: report.json)",
     )
-    parser.add_argument(
+    gpu_group = parser.add_mutually_exclusive_group()
+    gpu_group.add_argument(
         "--cpu",
         action="store_true",
-        help="Use CPU instead of GPU",
+        help="Force CPU even if a GPU is available",
+    )
+    gpu_group.add_argument(
+        "--gpu",
+        action="store_true",
+        help="Force GPU (fails if none is available)",
     )
 
     args = parser.parse_args()
+
+    # Resolve device: explicit flag wins, otherwise auto-detect (None -> run_analysis picks).
+    if args.gpu:
+        use_gpu = True
+    elif args.cpu:
+        use_gpu = False
+    else:
+        use_gpu = None
 
     # Run analysis
     report = run_analysis(
         document_path=args.document,
         query=args.query,
-        use_gpu=not args.cpu,
+        use_gpu=use_gpu,
     )
 
     # Save report

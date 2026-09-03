@@ -1,0 +1,37 @@
+{
+  "_comment": "Small worked example of the eval_ner test-set format. Not FiNER-139 - replace with the real test split for benchmark numbers.",
+  "samples": [
+    {
+      "text": "Apple Inc. reported record revenue in Cupertino, California.",
+      "references": [
+        {"word": "Apple Inc.", "entity": "ORG"},
+        {"word": "Cupertino", "entity": "LOC"},
+        {"word": "California", "entity": "LOC"}
+      ],
+      "predictions": [
+        {"word": "Apple Inc.", "entity": "ORG"},
+        {"word": "Cupertino", "entity": "LOC"}
+      ]
+    },
+    {
+      "text": "Tim Cook discussed the outlook with analysts at Morgan Stanley.",
+      "references": [
+        {"word": "Tim Cook", "entity": "PER"},
+        {"word": "Morgan Stanley", "entity": "ORG"}
+      ],
+      "predictions": [
+        {"word": "Tim Cook", "entity": "PER"},
+        {"word": "Morgan Stanley", "entity": "ORG"}
+      ]
+    },
+    {
+      "text": "The shares trade on the Nasdaq Stock Market under the symbol AAPL.",
+      "references": [
+        {"word": "Nasdaq Stock Market", "entity": "STOCK_EXCHANGE"}
+      ],
+      "predictions": [
+        {"word": "Nasdaq", "entity": "STOCK_EXCHANGE"}
+      ]
+    }
+  ]
+}

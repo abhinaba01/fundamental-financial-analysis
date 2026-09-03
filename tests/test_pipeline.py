@@ -11,6 +11,8 @@ Tests:
 
 from __future__ import annotations
 
+import inspect
+
 import pytest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -142,7 +144,7 @@ def test_edge_re_query_condition():
         "document": None,
         "query": "test",
         "retrieved_chunks": [],  # Empty
-        "retrieval_score": 0.5,  # Below threshold
+        "retrieval_score": 0.2,  # Below threshold
         "retry_count": 0,
         "ner_results": {},
         "sentiment_results": {},
@@ -189,6 +191,99 @@ def test_evaluation_modules_import():
     assert sent_eval is not None
     assert rag_eval is not None
     assert kpi_eval is not None
+
+
+def test_kpi_agent_extracts_realistic_phrasing():
+    """Regression: KPI_KEYWORDS values are themselves capturing groups, and
+    wrapping them in another () shifted every group index by one, so
+    match.group(2) was the keyword text (not the number) and float()
+    silently failed for every sample. Also covers the "revenue of $X"
+    connector case, which the original regex could not match at all."""
+    agent = KPIAgent()
+    text = (
+        "Apple Inc. reported revenue of $119.60B for Q1 2024. "
+        "The company's gross margin was 38.2%. "
+        "Net income reached $24.20B, up 10% year-over-year."
+    )
+
+    kpis = agent._extract_kpi_patterns(text)
+
+    assert kpis["revenue"][0]["value"] == 119.6
+    assert kpis["revenue"][0]["unit"] == "B"
+    assert kpis["gross_margin"][0]["value"] == 38.2
+    assert kpis["net_income"][0]["value"] == 24.2
+
+
+def test_kpi_agent_does_not_treat_percentage_margin_as_dollar_amount():
+    """Regression: _perform_calculations divided the extracted gross_margin
+    value by revenue as if it were a dollar gross-profit figure, but the
+    regex captures gross margin as a percentage already - producing a
+    nonsense "calculated" margin instead of skipping the calculation."""
+    agent = KPIAgent()
+    extracted = {
+        "revenue": [{"name": "revenue", "value": 119.6, "unit": "B"}],
+        "gross_margin": [{"name": "gross margin", "value": 38.2, "unit": "%"}],
+    }
+
+    calculated = agent._perform_calculations(extracted)
+
+    assert calculated == {}
+
+
+def test_cleaner_normalizes_smart_quotes():
+    """Regression: _normalize_unicode's replace() calls used literal curly-quote
+    characters that had been corrupted to mojibake by a prior bad save, so
+    smart quotes silently passed through unchanged."""
+    cleaner = DocumentCleaner()
+    text = "He said “hello” and it’s fine."
+
+    normalized = cleaner._normalize_unicode(text)
+
+    assert all(ord(ch) < 128 for ch in normalized)
+    assert '"' in normalized
+
+
+def test_cleaner_financial_notation_preserves_word_boundary():
+    """Regression: the billion/million/thousand patterns consumed their
+    trailing boundary character (space/punctuation) instead of just checking
+    for it, so "$1.2 billion for" became "$1.20Bfor" (words jammed together)."""
+    cleaner = DocumentCleaner()
+
+    assert cleaner._normalize_financial_notation(
+        "revenue of $119.6 billion for Q1 2024"
+    ) == "revenue of $119.60B for Q1 2024"
+
+    assert cleaner._normalize_financial_notation(
+        "Net income reached $24.2 billion, up 10%."
+    ) == "Net income reached $24.20B, up 10%."
+
+
+def test_synthesis_agent_formats_retrieved_chunks():
+    """Regression: _format_chunks read chunk.section, but DocumentChunk has no
+    such attribute (section lives in chunk.metadata) - this raised
+    AttributeError as soon as any chunk was retrieved."""
+    from src.preprocessing.document import DocumentChunk, ChunkType
+
+    chunk = DocumentChunk(
+        text="Revenue grew 8%.",
+        chunk_type=ChunkType.MDA,
+        metadata={"similarity": 0.91, "section": "mda"},
+    )
+
+    formatted = SynthesisAgent()._format_chunks([chunk])
+
+    assert formatted[0]["section"] == "mda"
+    assert formatted[0]["chunk_type"] == "mda"
+
+
+def test_embedding_pipeline_accepts_device_argument():
+    """Regression: src.main.run_analysis calls EmbeddingPipeline(device=...),
+    which raised TypeError once the constructor's signature changed and
+    dropped the device parameter."""
+    from src.preprocessing.embedder import EmbeddingPipeline
+
+    sig = inspect.signature(EmbeddingPipeline.__init__)
+    assert "device" in sig.parameters
 
 
 if __name__ == "__main__":

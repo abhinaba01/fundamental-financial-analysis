@@ -45,7 +45,7 @@ agents:
     description: "Retrieval-Augmented Generation with chain-of-thought"
     retrieval:
       top_k: 5
-      similarity_threshold: 0.75
+      similarity_threshold: 0.5
       batch_size: 32
       device: "cuda"  # or "cpu"
     generation:

@@ -98,8 +98,10 @@ class KPIAgent:
         kpis = {}
 
         for kpi_type, pattern in KPI_KEYWORDS.items():
+            # pattern is already a capturing group, e.g. "(revenue|sales|...)"
             matches = re.finditer(
-                rf"({pattern})\s*(?:of|to|\$|::)?\s*([\d,\.]+)\s*([A-Z\%]*)",
+                rf"{pattern}\s*(?:of|to|was|is|reached|totaled|stood at)?"
+                rf"\s*(?:[:$]\s*){{0,2}}([\d,\.]+)\s*([A-Z\%]*)",
                 text,
                 re.IGNORECASE,
             )
@@ -141,14 +143,21 @@ class KPIAgent:
         calculated = {}
 
         try:
-            # Example: Calculate margin if we have gross profit and revenue
-            if "gross_margin" in extracted_kpis and "revenue" in extracted_kpis:
-                if len(extracted_kpis["gross_margin"]) > 0 and len(extracted_kpis["revenue"]) > 0:
-                    gp = extracted_kpis["gross_margin"][0]["value"]
-                    rev = extracted_kpis["revenue"][0]["value"]
+            # The "gross_margin" pattern matches both "gross margin" (already a
+            # percentage, e.g. "38.2%") and "gross profit" (a dollar figure).
+            # Only derive a margin when we actually captured a dollar amount;
+            # if it's already a "%", there's nothing to calculate.
+            gross_margin_entries = extracted_kpis.get("gross_margin", [])
+            revenue_entries = extracted_kpis.get("revenue", [])
 
-                    if rev != 0:
-                        margin_percent = (gp / rev) * 100
+            if gross_margin_entries and revenue_entries:
+                entry = gross_margin_entries[0]
+                if entry.get("unit", "").strip() != "%":
+                    gross_profit = entry["value"]
+                    revenue = revenue_entries[0]["value"]
+
+                    if revenue != 0:
+                        margin_percent = (gross_profit / revenue) * 100
                         calculated["calculated_gross_margin_percent"] = margin_percent
                         self.logger.debug(f"Calculated margin: {margin_percent:.2f}%")
 

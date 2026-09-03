@@ -4,6 +4,7 @@
 langgraph>=0.1.0
 langchain>=0.1.0
 langchain-openai>=0.1.0
+openai>=1.0.0
 
 # NLP & Language Models
 transformers>=4.36.0
@@ -48,11 +49,3 @@ black>=23.0.0
 flake8>=6.0.0
 mypy>=1.7.0
 isort>=5.13.0
-
-# Performance (optional)
-vllm>=0.3.0  # For Qwen inference
-ollama>=0.1.0  # Alternative to vLLM
-
-# Evaluation (optional)
-rouge-score>=0.1.2
-nltk>=3.8.0

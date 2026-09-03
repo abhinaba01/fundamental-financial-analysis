@@ -51,6 +51,7 @@ class AnalysisPipelineBuilder:
         kpi_agent=None,
         rag_agent=None,
         synthesis_agent=None,
+        device: str = "cpu",
     ):
         """
         Initialize pipeline builder with optional agent instances.
@@ -62,13 +63,15 @@ class AnalysisPipelineBuilder:
             kpi_agent: KPIAgent instance (created if None)
             rag_agent: RAGAgent instance (created if None)
             synthesis_agent: SynthesisAgent instance (created if None)
+            device: Device used for any agent created here ('cpu' or 'cuda') -
+                ignored for agents passed in explicitly
         """
         self.logger = logger
         self.embedding_pipeline = embedding_pipeline
 
         # Initialize agents (use provided or create new)
-        self.ner_agent = ner_agent or NERAgent()
-        self.sentiment_agent = sentiment_agent or SentimentAgent()
+        self.ner_agent = ner_agent or NERAgent(device=device)
+        self.sentiment_agent = sentiment_agent or SentimentAgent(device=device)
         self.kpi_agent = kpi_agent or KPIAgent()
         self.rag_agent = rag_agent or RAGAgent(embedding_pipeline=embedding_pipeline)
         self.synthesis_agent = synthesis_agent or SynthesisAgent()
@@ -168,15 +171,16 @@ class AnalysisPipelineBuilder:
         return compiled_graph
 
 
-def create_default_pipeline(embedding_pipeline=None) -> StateGraph:
+def create_default_pipeline(embedding_pipeline=None, device: str = "cpu") -> StateGraph:
     """
     Create default analysis pipeline with standard configuration.
 
     Args:
         embedding_pipeline: Optional EmbeddingPipeline instance
+        device: Device used for the NER/sentiment models ('cpu' or 'cuda')
 
     Returns:
         Compiled StateGraph ready for .invoke() or .stream()
     """
-    builder = AnalysisPipelineBuilder(embedding_pipeline=embedding_pipeline)
+    builder = AnalysisPipelineBuilder(embedding_pipeline=embedding_pipeline, device=device)
     return builder.build()

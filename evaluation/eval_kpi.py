@@ -21,6 +21,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from evaluation._cli import (
+    build_parser,
+    load_samples,
+    mean,
+    print_metrics,
+    to_dict,
+    write_output,
+)
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -215,3 +223,157 @@ class KPIEvaluator:
             "correct_steps": correct_calculations,
             "total_steps": len(calculation_steps),
         }
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+#
+# Test-set format (see evaluation/_cli.py for the accepted container shapes).
+# Each sample:
+#
+#     {
+#       "text": "Total net sales of 394328 ...",     # required for --run-agent
+#       "reference_kpis": {"revenue": 394328.0},     # ground truth
+#       "extracted_kpis": {"revenue": 394328.0},     # optional
+#       "calculation_steps": [                       # optional, scored separately
+#         {"operands": [169148, 394328], "operator": "/", "expected_result": 0.4289}
+#       ]
+#     }
+#
+# "gold_kpis" is accepted as an alias for "reference_kpis"; "predicted_kpis" and
+# "predictions" as aliases for "extracted_kpis".
+
+
+def _coerce_kpi_values(kpis: dict[str, Any] | None, *, context: str) -> dict[str, float]:
+    """
+    Coerce a KPI mapping to {name: float}, dropping entries that are not numeric.
+
+    Args:
+        kpis: Raw KPI mapping from a test set
+        context: Description used in warnings
+
+    Returns:
+        Mapping of KPI name to float value
+    """
+    coerced: dict[str, float] = {}
+
+    for name, value in (kpis or {}).items():
+        try:
+            coerced[name] = float(value)
+        except (TypeError, ValueError):
+            logger.warning(f"Dropping non-numeric KPI {name}={value!r} in {context}")
+
+    return coerced
+
+
+def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
+    """
+    Populate each sample's "extracted_kpis" by running KPIAgent over its text.
+
+    The agent returns every regex hit per KPI type; the evaluator scores a single
+    value per type, so the first match is taken.
+
+    Args:
+        samples: Test-set samples, mutated in place
+    """
+    from src.agents.kpi_agent import KPIAgent
+
+    agent = KPIAgent()
+
+    for index, sample in enumerate(samples):
+        text = sample.get("text", "")
+
+        if not text:
+            logger.warning(f"Sample {index} has no 'text'; extracting no KPIs")
+            sample["extracted_kpis"] = {}
+            continue
+
+        matches = agent._extract_kpi_patterns(text)
+        sample["extracted_kpis"] = {
+            kpi_type: entries[0]["value"] for kpi_type, entries in matches.items() if entries
+        }
+
+    logger.info(f"Generated KPI extractions for {len(samples)} samples")
+
+
+def main() -> None:
+    """CLI entry point for KPI evaluation."""
+    parser = build_parser(
+        description="Evaluate the KPI agent against a FinQA style test set",
+        agent_help="Load KPIAgent and extract KPIs from each sample's 'text'",
+    )
+    args = parser.parse_args()
+
+    samples = load_samples(args)
+
+    if args.run_agent:
+        _predict_with_agent(samples)
+
+    evaluator = KPIEvaluator()
+
+    per_sample: list[KPIMetrics] = []
+    per_type_values: dict[str, list[float]] = {}
+    calculation_steps: list[dict[str, Any]] = []
+    without_extractions = 0
+
+    for index, sample in enumerate(samples):
+        reference = sample.get("reference_kpis", sample.get("gold_kpis"))
+
+        if reference is None:
+            raise SystemExit(
+                f"Sample {index} has no 'reference_kpis' (or 'gold_kpis') key. "
+                "Every sample needs ground-truth KPI values."
+            )
+
+        extracted = sample.get(
+            "extracted_kpis", sample.get("predicted_kpis", sample.get("predictions"))
+        )
+
+        if extracted is None:
+            without_extractions += 1
+            extracted = {}
+
+        metrics = evaluator.evaluate(
+            _coerce_kpi_values(extracted, context=f"sample {index} extraction"),
+            _coerce_kpi_values(reference, context=f"sample {index} ground truth"),
+        )
+        per_sample.append(metrics)
+
+        for kpi_type, accuracy in metrics.per_type_accuracy.items():
+            per_type_values.setdefault(kpi_type, []).append(accuracy)
+
+        calculation_steps.extend(sample.get("calculation_steps", []))
+
+    if without_extractions:
+        logger.warning(
+            f"{without_extractions}/{len(samples)} samples carried no 'extracted_kpis' "
+            "and were scored as complete misses. Pass --run-agent to generate them."
+        )
+
+    payload: dict[str, Any] = {
+        "aggregation": "macro (mean across samples)",
+        "samples_evaluated": len(samples),
+        "numeric_accuracy": mean([m.numeric_accuracy for m in per_sample]),
+        "extraction_recall": mean([m.extraction_recall for m in per_sample]),
+        "type_coverage": mean([m.type_coverage for m in per_sample]),
+        "mean_absolute_error": mean([m.mean_absolute_error for m in per_sample]),
+        "mean_rmse": mean([m.rmse for m in per_sample]),
+        "per_type_accuracy": {
+            kpi_type: mean(values) for kpi_type, values in sorted(per_type_values.items())
+        },
+        "total_reference_kpis": sum(m.total_kpis for m in per_sample),
+    }
+
+    if calculation_steps:
+        payload["calculations"] = evaluator.evaluate_calculation_correctness(calculation_steps)
+
+    if args.benchmark:
+        payload["finqa_benchmark"] = evaluator.benchmark_against_finqa()
+
+    print_metrics("KPI EVALUATION (FinQA)", payload)
+    write_output(args.output, payload)
+
+
+if __name__ == "__main__":
+    main()

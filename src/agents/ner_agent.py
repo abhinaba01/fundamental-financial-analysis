@@ -32,12 +32,13 @@ MODEL_NAME = "dslim/bert-base-NER"
 class NERAgent:
     """Named Entity Recognition agent for financial documents."""
 
-    def __init__(self, model_name: str = MODEL_NAME):
+    def __init__(self, model_name: str = MODEL_NAME, device: str = "cpu"):
         """
         Initialize the NER agent.
 
         Args:
             model_name: HuggingFace model ID for NER
+            device: Device to run the model on ('cpu' or 'cuda')
         """
         if pipeline is None:
             raise ImportError("transformers not installed. Install with: pip install transformers")
@@ -45,11 +46,12 @@ class NERAgent:
         self.logger = logger
         self.model_name = model_name
 
-        self.logger.info(f"Loading NER model: {model_name}")
+        self.logger.info(f"Loading NER model: {model_name} on {device}")
         self.ner_pipeline = pipeline(
             "ner",
             model=model_name,
             aggregation_strategy="simple",
+            device=device,
         )
         self.logger.info(f"NER model loaded successfully")
 

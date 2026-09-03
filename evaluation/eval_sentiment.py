@@ -21,6 +21,13 @@ from dataclasses import dataclass
 from typing import Any
 from collections import Counter
 
+from evaluation._cli import (
+    build_parser,
+    load_samples,
+    print_metrics,
+    to_dict,
+    write_output,
+)
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -202,3 +209,156 @@ class SentimentEvaluator:
 
         self.logger.info("Using Financial PhraseBank benchmarks...")
         return benchmarks
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+#
+# Test-set format (see evaluation/_cli.py for the accepted container shapes).
+# Each sample:
+#
+#     {
+#       "text": "Operating profit rose to EUR 13.1 mn.",  # required for --run-agent
+#       "sentiment": "positive",                          # ground truth
+#       "prediction": "positive"                          # optional
+#     }
+#
+# "label" is accepted as an alias for "sentiment"; "predicted_sentiment" and
+# "predicted" as aliases for "prediction".
+
+# Label spellings seen in the public datasets and model outputs, mapped onto the
+# three classes the evaluator scores. The confusion matrix is keyed by these
+# exact strings, so anything unmapped has to be rejected rather than guessed.
+LABEL_ALIASES = {
+    "positive": "positive",
+    "pos": "positive",
+    "bullish": "positive",
+    "2": "positive",
+    "neutral": "neutral",
+    "neu": "neutral",
+    "1": "neutral",
+    "negative": "negative",
+    "neg": "negative",
+    "bearish": "negative",
+    "0": "negative",
+}
+
+
+def _normalize_label(label: Any, *, context: str) -> str:
+    """
+    Map a raw sentiment label onto one of negative/neutral/positive.
+
+    Args:
+        label: Raw label from a test set or model output
+        context: Description used in the error message
+
+    Returns:
+        Canonical class name
+
+    Raises:
+        SystemExit: Label cannot be mapped onto a known class
+    """
+    normalized = LABEL_ALIASES.get(str(label).strip().lower())
+
+    if normalized is None:
+        raise SystemExit(
+            f"Unrecognised sentiment label {label!r} in {context}. "
+            f"Expected one of: {sorted(set(LABEL_ALIASES.values()))}"
+        )
+
+    return normalized
+
+
+def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
+    """
+    Populate each sample's "prediction" by running SentimentAgent over its text.
+
+    Classification is per-sample text (the Financial PhraseBank is sentence
+    level), not the document-level aggregation the agent performs in the graph.
+
+    Args:
+        samples: Test-set samples, mutated in place
+    """
+    from src.agents.sentiment_agent import SentimentAgent
+
+    agent = SentimentAgent()
+
+    for index, sample in enumerate(samples):
+        text = sample.get("text", "")
+
+        if not text:
+            logger.warning(f"Sample {index} has no 'text'; predicting neutral")
+            sample["prediction"] = "neutral"
+            continue
+
+        result = agent.sentiment_pipeline(text[:512])
+        sample["prediction"] = result[0]["label"] if result else "neutral"
+
+    logger.info(f"Generated predictions for {len(samples)} samples")
+
+
+def main() -> None:
+    """CLI entry point for sentiment evaluation."""
+    parser = build_parser(
+        description=(
+            "Evaluate the sentiment agent against a Financial PhraseBank style test set"
+        ),
+        agent_help="Load SentimentAgent and classify each sample's 'text'",
+    )
+    args = parser.parse_args()
+
+    samples = load_samples(args)
+
+    if args.run_agent:
+        _predict_with_agent(samples)
+
+    predictions: list[dict[str, Any]] = []
+    references: list[dict[str, Any]] = []
+    without_predictions = 0
+
+    for index, sample in enumerate(samples):
+        reference = sample.get("sentiment", sample.get("label"))
+
+        if reference is None:
+            raise SystemExit(
+                f"Sample {index} has no 'sentiment' (or 'label') key. "
+                "Every sample needs a ground-truth class."
+            )
+
+        prediction = sample.get(
+            "prediction", sample.get("predicted_sentiment", sample.get("predicted"))
+        )
+
+        if prediction is None:
+            without_predictions += 1
+            prediction = "neutral"
+
+        references.append(
+            {"sentiment": _normalize_label(reference, context=f"sample {index} ground truth")}
+        )
+        predictions.append(
+            {"sentiment": _normalize_label(prediction, context=f"sample {index} prediction")}
+        )
+
+    if without_predictions:
+        logger.warning(
+            f"{without_predictions}/{len(samples)} samples carried no 'prediction' "
+            "and defaulted to neutral. Pass --run-agent to generate them."
+        )
+
+    evaluator = SentimentEvaluator()
+    metrics = evaluator.evaluate(predictions, references)
+
+    payload = to_dict(metrics)
+    payload["samples_evaluated"] = len(samples)
+
+    if args.benchmark:
+        payload["phrasebank_benchmark"] = evaluator.benchmark_against_financial_phrasebank()
+
+    print_metrics("SENTIMENT EVALUATION (Financial PhraseBank)", payload)
+    write_output(args.output, payload)
+
+
+if __name__ == "__main__":
+    main()

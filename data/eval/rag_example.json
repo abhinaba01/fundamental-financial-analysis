@@ -1,0 +1,29 @@
+{
+  "_comment": "Small worked example of the eval_rag test-set format. Not FinanceBench - replace with the real test split for benchmark numbers.",
+  "samples": [
+    {
+      "question": "What were total net sales in fiscal 2023?",
+      "answer": "Total net sales were 383.3 billion dollars.",
+      "gold_chunks": [
+        {"chunk_id": "aapl-2023-fin-01", "text": "Total net sales were $383.3 billion in fiscal 2023."}
+      ],
+      "retrieved_chunks": [
+        {"chunk_id": "aapl-2023-fin-01", "text": "Total net sales were $383.3 billion in fiscal 2023."},
+        {"chunk_id": "aapl-2023-mda-04", "text": "The decrease in net sales was driven by lower iPhone volumes."}
+      ],
+      "generated_answer": "Total net sales were 383.3 billion dollars."
+    },
+    {
+      "question": "What is the primary risk cited for supply chain concentration?",
+      "answer": "A substantial portion of manufacturing is concentrated with a limited number of suppliers.",
+      "gold_chunks": [
+        {"chunk_id": "aapl-2023-risk-11", "text": "Manufacturing is concentrated with a limited number of outsourcing partners."}
+      ],
+      "retrieved_chunks": [
+        {"chunk_id": "aapl-2023-mda-04", "text": "The decrease in net sales was driven by lower iPhone volumes."},
+        {"chunk_id": "aapl-2023-risk-11", "text": "Manufacturing is concentrated with a limited number of outsourcing partners."}
+      ],
+      "generated_answer": "Manufacturing is concentrated with a limited number of outsourcing partners."
+    }
+  ]
+}

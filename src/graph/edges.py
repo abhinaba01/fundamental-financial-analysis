@@ -16,8 +16,11 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Configuration for edge conditions
-SIMILARITY_THRESHOLD = 0.75
+# Configuration for edge conditions.
+# BAAI/bge-large-en-v1.5 cosine similarities for genuinely relevant chunks
+# typically land around 0.5-0.65, not near 1.0 - a 0.75 threshold is
+# unreachable in practice and forces every query into the retry/failure path.
+SIMILARITY_THRESHOLD = 0.5
 MIN_CHUNKS_THRESHOLD = 3
 MAX_RETRIES = 2
 

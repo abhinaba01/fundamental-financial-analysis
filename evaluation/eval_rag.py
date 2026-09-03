@@ -17,6 +17,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from evaluation._cli import (
+    build_parser,
+    load_samples,
+    mean,
+    print_metrics,
+    to_dict,
+    write_output,
+)
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -248,3 +256,186 @@ class RAGEvaluator:
 
         self.logger.info("Using FinanceBench benchmarks...")
         return benchmarks
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+#
+# Test-set format (see evaluation/_cli.py for the accepted container shapes).
+# Each sample:
+#
+#     {
+#       "question": "What were FY2023 net sales?",
+#       "answer": "Total net sales were $383.3 billion.",   # reference answer
+#       "gold_chunks": ["...evidence text..."],             # ground-truth evidence
+#       "retrieved_chunks": ["...evidence text..."],        # optional
+#       "generated_answer": "..."                           # optional
+#     }
+#
+# Chunks may be plain strings or objects with "chunk_id" and/or "text".
+# "query" aliases "question"; "reference_answer" aliases "answer"; "gold" and
+# "evidence" alias "gold_chunks".
+
+
+def _chunk_identity(chunk: Any) -> dict[str, str]:
+    """
+    Reduce a chunk to a single-key identity dict.
+
+    The evaluator matches chunks with ``chunk in gold_chunks``, i.e. full dict
+    equality, so a retrieved chunk carrying extra metadata (similarity scores,
+    page numbers) would never match its gold counterpart. Collapsing both sides
+    to one stable key makes that comparison behave as identity matching.
+
+    Args:
+        chunk: A string, or an object with "chunk_id" and/or "text"
+
+    Returns:
+        Single-key dict identifying the chunk
+    """
+    if isinstance(chunk, str):
+        return {"id": " ".join(chunk.split()).lower()}
+
+    if isinstance(chunk, dict):
+        chunk_id = chunk.get("chunk_id") or chunk.get("id")
+        if chunk_id:
+            return {"id": str(chunk_id)}
+        return {"id": " ".join(str(chunk.get("text", "")).split()).lower()}
+
+    return {"id": " ".join(str(chunk).split()).lower()}
+
+
+def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
+    """
+    Populate each sample's retrieval and generation output by running RAGAgent.
+
+    Retrieval runs against the persistent ChromaDB collection, so the corpus
+    must already be indexed (e.g. via ``python -m src.main``). Building the
+    EmbeddingPipeline needs OPENAI_API_KEY.
+
+    Args:
+        samples: Test-set samples, mutated in place
+    """
+    from src.agents.rag_agent import RAGAgent
+    from src.preprocessing.embedder import EmbeddingPipeline
+
+    try:
+        embedder = EmbeddingPipeline()
+    except (ImportError, ValueError) as exc:
+        raise SystemExit(
+            f"Cannot run the RAG agent: {exc}\n"
+            "Retrieval needs an indexed vector store and OPENAI_API_KEY. "
+            "Index a corpus first with `python -m src.main`, or score a test set "
+            "that already carries 'retrieved_chunks' and 'generated_answer'."
+        ) from exc
+
+    agent = RAGAgent(embedding_pipeline=embedder)
+
+    for index, sample in enumerate(samples):
+        question = sample.get("question", sample.get("query", ""))
+
+        if not question:
+            logger.warning(f"Sample {index} has no 'question'; skipping retrieval")
+            sample["retrieved_chunks"] = []
+            sample["generated_answer"] = ""
+            continue
+
+        state = {
+            "document": None,
+            "query": question,
+            "retrieved_chunks": [],
+            "retrieval_score": 0.0,
+            "retry_count": 0,
+            "ner_results": {},
+            "sentiment_results": {},
+            "kpi_results": {},
+            "cot_reasoning": "",
+            "final_answer": "",
+            "report": {},
+        }
+
+        result = agent(state)
+
+        sample["retrieved_chunks"] = [
+            {"chunk_id": chunk.chunk_id, "text": chunk.text}
+            for chunk in result.get("retrieved_chunks", [])
+        ]
+        sample["generated_answer"] = result.get("final_answer", "")
+
+    logger.info(f"Generated RAG output for {len(samples)} samples")
+
+
+def main() -> None:
+    """CLI entry point for RAG evaluation."""
+    parser = build_parser(
+        description="Evaluate the RAG agent against a FinanceBench style test set",
+        agent_help=(
+            "Load RAGAgent and answer each sample's 'question' against the indexed "
+            "vector store (needs OPENAI_API_KEY)"
+        ),
+    )
+    args = parser.parse_args()
+
+    samples = load_samples(args)
+
+    if args.run_agent:
+        _predict_with_agent(samples)
+
+    evaluator = RAGEvaluator()
+
+    per_sample: list[RAGMetrics] = []
+    without_output = 0
+
+    for index, sample in enumerate(samples):
+        reference_answer = sample.get("answer", sample.get("reference_answer"))
+
+        if reference_answer is None:
+            raise SystemExit(
+                f"Sample {index} has no 'answer' (or 'reference_answer') key. "
+                "Every sample needs a ground-truth answer."
+            )
+
+        gold = sample.get("gold_chunks", sample.get("gold", sample.get("evidence", [])))
+        retrieved = sample.get("retrieved_chunks")
+        generated = sample.get("generated_answer")
+
+        if retrieved is None and generated is None:
+            without_output += 1
+
+        per_sample.append(
+            evaluator.evaluate_end_to_end(
+                retrieved_chunks=[_chunk_identity(chunk) for chunk in (retrieved or [])],
+                generated_answer=generated or "",
+                gold_chunks=[_chunk_identity(chunk) for chunk in gold],
+                reference_answer=str(reference_answer),
+            )
+        )
+
+    if without_output:
+        logger.warning(
+            f"{without_output}/{len(samples)} samples carried neither 'retrieved_chunks' "
+            "nor 'generated_answer' and scored zero. Pass --run-agent to generate them."
+        )
+
+    payload: dict[str, Any] = {
+        "aggregation": "macro (mean across samples)",
+        "samples_evaluated": len(samples),
+        "exact_match": mean([m.exact_match for m in per_sample]),
+        "rouge_l": mean([m.rouge_l for m in per_sample]),
+        "bleu_score": mean([m.bleu_score for m in per_sample]),
+        "mrr": mean([m.mrr for m in per_sample]),
+        "ndcg": mean([m.ndcg for m in per_sample]),
+        "retrieval_hit_rate_top1": mean([m.retrieval_hit_rate_top1 for m in per_sample]),
+        "retrieval_hit_rate_top5": mean([m.retrieval_hit_rate_top5 for m in per_sample]),
+        "unavailable_metrics": ["bert_score (not implemented in RAGEvaluator)"],
+    }
+
+    if args.benchmark:
+        payload["financebench_benchmark"] = evaluator.benchmark_against_financebench()
+
+    print_metrics("RAG EVALUATION (FinanceBench)", payload)
+    write_output(args.output, payload)
+
+
+if __name__ == "__main__":
+    main()

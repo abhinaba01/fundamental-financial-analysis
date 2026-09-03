@@ -15,6 +15,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from evaluation._cli import (
+    build_parser,
+    load_samples,
+    print_metrics,
+    to_dict,
+    write_output,
+)
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -175,3 +182,132 @@ class NERERvaluator:
         self.logger.info("Comparing against FiNER-139 benchmarks...")
 
         return expected_benchmarks
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+#
+# Test-set format (see evaluation/_cli.py for the accepted container shapes).
+# Each sample:
+#
+#     {
+#       "text": "Apple Inc. reported record revenue.",   # required for --run-agent
+#       "references": [{"word": "Apple Inc.", "entity": "ORG"}],
+#       "predictions": [{"word": "Apple Inc.", "entity": "ORG"}]   # optional
+#     }
+#
+# "entities" is accepted as an alias for "references", and "entity_group" /
+# "label" as aliases for "entity" (the former is what the HuggingFace pipeline
+# emits when aggregation_strategy="simple").
+
+
+def _normalize_entities(
+    entities: list[dict[str, Any]] | None, sample_index: int
+) -> list[dict[str, Any]]:
+    """
+    Normalise raw entity dicts to the {word, entity} shape the evaluator scores.
+
+    The evaluator pools everything into (word, entity) sets, so the surface form
+    is namespaced by sample index — otherwise the same word occurring in two
+    different samples would cross-match and inflate true positives.
+
+    Args:
+        entities: Raw entity dicts from a test set or a HuggingFace pipeline
+        sample_index: Index of the sample these entities came from
+
+    Returns:
+        List of normalised entity dicts
+    """
+    normalized = []
+
+    for entity in entities or []:
+        word = entity.get("word", entity.get("text", ""))
+        label = entity.get(
+            "entity", entity.get("entity_group", entity.get("label", "unknown"))
+        )
+
+        normalized.append({"word": f"{sample_index}::{word}", "entity": label})
+
+    return normalized
+
+
+def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
+    """
+    Populate each sample's "predictions" by running NERAgent over its text.
+
+    Args:
+        samples: Test-set samples, mutated in place
+    """
+    from src.agents.ner_agent import NERAgent
+
+    agent = NERAgent()
+
+    for index, sample in enumerate(samples):
+        text = sample.get("text", "")
+
+        if not text:
+            logger.warning(f"Sample {index} has no 'text'; predicting no entities")
+            sample["predictions"] = []
+            continue
+
+        sample["predictions"] = agent._extract_entities(text)
+
+    logger.info(f"Generated predictions for {len(samples)} samples")
+
+
+def main() -> None:
+    """CLI entry point for NER evaluation."""
+    parser = build_parser(
+        description="Evaluate the NER agent against a FiNER-139 style test set",
+        agent_help="Load NERAgent and tag each sample's 'text' to produce predictions",
+    )
+    args = parser.parse_args()
+
+    samples = load_samples(args)
+
+    if args.run_agent:
+        _predict_with_agent(samples)
+
+    predictions: list[dict[str, Any]] = []
+    references: list[dict[str, Any]] = []
+    without_predictions = 0
+
+    for index, sample in enumerate(samples):
+        refs = sample.get("references", sample.get("entities"))
+
+        if refs is None:
+            raise SystemExit(
+                f"Sample {index} has no 'references' (or 'entities') key. "
+                "Every sample needs ground-truth entities."
+            )
+
+        preds = sample.get("predictions")
+        if preds is None:
+            without_predictions += 1
+            preds = []
+
+        references.extend(_normalize_entities(refs, index))
+        predictions.extend(_normalize_entities(preds, index))
+
+    if without_predictions:
+        logger.warning(
+            f"{without_predictions}/{len(samples)} samples carried no 'predictions' "
+            "and were scored as complete misses. Pass --run-agent to generate them."
+        )
+
+    evaluator = NERERvaluator()
+    metrics = evaluator.evaluate(predictions, references)
+
+    payload = to_dict(metrics)
+    payload["samples_evaluated"] = len(samples)
+
+    if args.benchmark:
+        payload["finer139_benchmark"] = evaluator.benchmark_against_finer139(predictions)
+
+    print_metrics("NER EVALUATION (FiNER-139)", payload)
+    write_output(args.output, payload)
+
+
+if __name__ == "__main__":
+    main()

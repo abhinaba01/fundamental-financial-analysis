@@ -3,7 +3,8 @@ RAG Agent: Retrieval-Augmented Generation with Chain-of-Thought.
 
 Uses:
 - BAAI/bge-large-en-v1.5 for retrieval
-- gpt-4o for generation with chain-of-thought
+- gpt-4o for generation with chain-of-thought (falls back to extractive
+  synthesis if OPENAI_API_KEY is not set or the API call fails)
 
 Performs:
 - Query-based document chunk retrieval
@@ -17,16 +18,29 @@ Output: GraphState with retrieved_chunks, cot_reasoning, final_answer populated
 
 from __future__ import annotations
 
+import os
+
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
+
 from src.graph.state import GraphState
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Configuration
+# Configuration.
+# BAAI/bge-large-en-v1.5 cosine similarities for genuinely relevant chunks
+# typically land around 0.5-0.65, not near 1.0 - keep this in sync with
+# src/graph/edges.py's SIMILARITY_THRESHOLD.
 RETRIEVAL_TOP_K = 5
-SIMILARITY_THRESHOLD = 0.75
+SIMILARITY_THRESHOLD = 0.5
 MIN_CHUNKS_THRESHOLD = 3
 MAX_RETRIES = 2
+GENERATION_MODEL = "gpt-4o"
+GENERATION_TEMPERATURE = 0.7
+GENERATION_MAX_TOKENS = 1024
 
 # System prompt for CoT reasoning
 COT_SYSTEM_PROMPT = """You are a financial analysis expert assistant. When answering questions about financial documents:
@@ -46,15 +60,29 @@ ANSWER: [Synthesized answer with citations]
 class RAGAgent:
     """RAG agent with retrieval, chain-of-thought reasoning, and synthesis."""
 
-    def __init__(self, embedding_pipeline=None):
+    def __init__(self, embedding_pipeline=None, generation_model: str = GENERATION_MODEL):
         """
         Initialize the RAG agent.
 
         Args:
             embedding_pipeline: EmbeddingPipeline instance for retrieval
+            generation_model: OpenAI chat model used for CoT generation
         """
         self.logger = logger
         self.embedding_pipeline = embedding_pipeline
+        self.generation_model = generation_model
+
+        self.llm_client = None
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if OpenAI is None:
+            self.logger.warning("openai package not installed. RAG will use extractive synthesis only.")
+        elif not api_key:
+            self.logger.warning(
+                "OPENAI_API_KEY not set. RAG will fall back to extractive synthesis "
+                "instead of LLM-generated chain-of-thought answers."
+            )
+        else:
+            self.llm_client = OpenAI(api_key=api_key)
 
         self.logger.info("RAG agent initialized successfully")
 
@@ -166,19 +194,16 @@ class RAGAgent:
         Returns:
             Reformulated query
         """
-        reformulations = [
-            f"Provide detailed information about: {original_query}",
-            f"What does the document say about: {original_query}?",
-            f"Find all references to: {original_query}",
-        ]
-
-        return reformulations[0]
+        return f"Provide detailed information about: {original_query}"
 
     def _generate_answer(
         self, query: str, chunks
     ) -> tuple[str, str]:
         """
         Generate answer with chain-of-thought reasoning.
+
+        Uses the configured LLM when available; otherwise falls back to
+        extractive synthesis directly from the retrieved chunks.
 
         Args:
             query: Query text
@@ -187,19 +212,44 @@ class RAGAgent:
         Returns:
             Tuple of (cot_reasoning, final_answer)
         """
-        try:
-            # Build context from chunks
-            context = self._build_context(chunks)
+        context = self._build_context(chunks)
 
-            # Simple synthesis without LLM for MVP
-            cot_reasoning = self._build_reasoning(query, chunks, context)
-            final_answer = self._synthesize_answer(query, chunks, context)
+        if self.llm_client is not None:
+            try:
+                return self._generate_llm_answer(query, context)
+            except Exception as e:
+                self.logger.error(f"LLM generation failed, falling back to extractive synthesis: {e}")
 
-            return cot_reasoning, final_answer
+        cot_reasoning = self._build_reasoning(query, chunks)
+        final_answer = self._synthesize_answer(chunks)
+        return cot_reasoning, final_answer
 
-        except Exception as e:
-            self.logger.error(f"Error generating answer: {e}")
-            return "", f"Error: {str(e)}"
+    def _generate_llm_answer(self, query: str, context: str) -> tuple[str, str]:
+        """
+        Generate a chain-of-thought answer via the configured OpenAI chat model.
+
+        Args:
+            query: Query text
+            context: Formatted context string built from retrieved chunks
+
+        Returns:
+            Tuple of (cot_reasoning, final_answer)
+        """
+        response = self.llm_client.chat.completions.create(
+            model=self.generation_model,
+            temperature=GENERATION_TEMPERATURE,
+            max_tokens=GENERATION_MAX_TOKENS,
+            messages=[
+                {"role": "system", "content": COT_SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"Question: {query}\n\nRetrieved evidence:\n{context}",
+                },
+            ],
+        )
+
+        response_text = response.choices[0].message.content or ""
+        return self._parse_response(response_text)
 
     def _build_context(self, chunks) -> str:
         """
@@ -219,19 +269,18 @@ class RAGAgent:
 
             context_parts.append(
                 f"[Chunk {i}] ({section}, similarity: {similarity:.3f})\n"
-                f"{chunk.text[:300]}...\n"
+                f"{chunk.text[:500]}...\n"
             )
 
         return "\n".join(context_parts)
 
-    def _build_reasoning(self, query: str, chunks, context: str) -> str:
+    def _build_reasoning(self, query: str, chunks) -> str:
         """
-        Build step-by-step reasoning from chunks.
+        Build step-by-step reasoning from chunks (extractive fallback).
 
         Args:
             query: Original query
             chunks: Retrieved chunks
-            context: Formatted context
 
         Returns:
             Reasoning string
@@ -245,14 +294,12 @@ class RAGAgent:
 
         return reasoning
 
-    def _synthesize_answer(self, query: str, chunks, context: str) -> str:
+    def _synthesize_answer(self, chunks) -> str:
         """
-        Synthesize final answer from chunks.
+        Synthesize final answer from chunks (extractive fallback).
 
         Args:
-            query: Query text
             chunks: Retrieved chunks
-            context: Formatted context
 
         Returns:
             Final answer string
@@ -260,62 +307,13 @@ class RAGAgent:
         if not chunks:
             return "No information found to answer this query."
 
-        # Simple synthesis: combine chunk texts
-        answer_parts = []
-        for chunk in chunks:
-            answer_parts.append(chunk.text[:200])
-
+        answer_parts = [chunk.text[:200] for chunk in chunks]
         answer = " ".join(answer_parts)
 
         if len(answer) > 500:
             answer = answer[:500] + "..."
 
         return answer
-
-    def _generate_answer(
-        self, query: str, chunks
-    ) -> tuple[str, str]:
-        """
-        Generate answer with chain-of-thought reasoning.
-
-        Args:
-            query: Query text
-            chunks: Retrieved DocumentChunk objects
-
-        Returns:
-            Tuple of (cot_reasoning, final_answer)
-        """
-        try:
-            context = self._build_context(chunks)
-            cot_reasoning = self._build_reasoning(query, chunks, context)
-            final_answer = self._synthesize_answer(query, chunks, context)
-            return cot_reasoning, final_answer
-        except Exception as e:
-            self.logger.error(f"Error generating answer: {e}")
-            return "", f"Error: {str(e)}"
-
-    def _build_context(self, chunks) -> str:
-        """
-        Build context string from retrieved chunks.
-
-        Args:
-            chunks: List of DocumentChunk objects
-
-        Returns:
-            Formatted context string
-        """
-        context_parts = []
-
-        for i, chunk in enumerate(chunks,1):
-            similarity = chunk.metadata.get("similarity", 0.0)
-            section = chunk.metadata.get("section", "general")
-
-            context_parts.append(
-                f"[Chunk {i}] ({section}, similarity: {similarity:.3f})\n"
-                f"{chunk.text[:500]}...\n"
-            )
-
-        return "\n".join(context_parts)
 
     def _parse_response(self, response_text: str) -> tuple[str, str]:
         """

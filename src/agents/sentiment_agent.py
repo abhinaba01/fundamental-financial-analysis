@@ -56,6 +56,7 @@ class SentimentAgent:
         self,
         primary_model: str = PRIMARY_MODEL,
         secondary_model: str = SECONDARY_MODEL,
+        device: str = "cpu",
     ):
         """
         Initialize the Sentiment agent.
@@ -63,6 +64,7 @@ class SentimentAgent:
         Args:
             primary_model: Primary sentiment model (Financial PhraseBank trained)
             secondary_model: Secondary tone model (for earnings calls)
+            device: Device to run the models on ('cpu' or 'cuda')
         """
         if pipeline is None:
             raise ImportError("transformers not installed. Install with: pip install transformers")
@@ -71,17 +73,19 @@ class SentimentAgent:
         self.primary_model = primary_model
         self.secondary_model = secondary_model
 
-        self.logger.info(f"Loading sentiment model: {primary_model}")
+        self.logger.info(f"Loading sentiment model: {primary_model} on {device}")
         self.sentiment_pipeline = pipeline(
             "text-classification",
             model=primary_model,
+            device=device,
         )
 
-        self.logger.info(f"Loading tone model: {secondary_model}")
+        self.logger.info(f"Loading tone model: {secondary_model} on {device}")
         try:
             self.tone_pipeline = pipeline(
                 "text-classification",
                 model=secondary_model,
+                device=device,
             )
         except Exception as e:
             self.logger.warning(

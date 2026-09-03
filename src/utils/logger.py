@@ -25,6 +25,14 @@ def get_logger(name: str) -> logging.Logger:
 
     logger.setLevel(logging.DEBUG)
 
+    # On Windows, sys.stdout is often bound to a non-UTF-8 console codepage
+    # (e.g. cp1252). A log message containing a non-ASCII character would
+    # otherwise raise UnicodeEncodeError from inside the logging module.
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except AttributeError:
+        pass
+
     # Stream handler (console output)
     handler = logging.StreamHandler(sys.stdout)
     handler.setLevel(logging.INFO)

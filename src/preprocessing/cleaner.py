@@ -37,21 +37,28 @@ DISCLAIMER_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 COPYRIGHT_PATTERN = re.compile(
-    r"©|©|\(c\)\s*\d{4}|copyright\s*(?:©|©)?\s*\d{4}",
+    r"©|\(c\)\s*\d{4}|copyright\s*(?:©)?\s*\d{4}",
     re.IGNORECASE,
 )
 
-# Financial notation normalization patterns
+# Financial notation normalization patterns.
+# The trailing boundary is a lookahead (?=...) so it isn't consumed by the
+# match - a plain (?:...) group would eat the following space/punctuation and
+# the replacement would jam onto the next word (e.g. "$1.2 billion for" ->
+# "$1.20Bfor" instead of "$1.20B for"). Comma/period/semicolon are included
+# since financial prose routinely follows these figures with punctuation
+# (e.g. "$24.2 billion, up 10%").
+_UNIT_BOUNDARY = r"(?=[\s.,;)]|$)"
 BILLION_PATTERN = re.compile(
-    r"\$\s*([\d,]+(?:\.\d+)?)\s*(?:billion|B)(?:\s|$|\))",
+    rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:billion|B){_UNIT_BOUNDARY}",
     re.IGNORECASE,
 )
 MILLION_PATTERN = re.compile(
-    r"\$\s*([\d,]+(?:\.\d+)?)\s*(?:million|M)(?:\s|$|\))",
+    rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:million|M){_UNIT_BOUNDARY}",
     re.IGNORECASE,
 )
 THOUSAND_PATTERN = re.compile(
-    r"\$\s*([\d,]+(?:\.\d+)?)\s*(?:thousand|K)(?:\s|$|\))",
+    rf"\$\s*([\d,]+(?:\.\d+)?)\s*(?:thousand|K){_UNIT_BOUNDARY}",
     re.IGNORECASE,
 )
 PERCENT_PATTERN = re.compile(
@@ -100,7 +107,7 @@ class DocumentCleaner:
         cleaned_doc = replace(doc, cleaned_text=text)
 
         self.logger.info(
-            f"Cleaned: {len(doc.raw_text)} chars → {len(text)} chars"
+            f"Cleaned: {len(doc.raw_text)} chars -> {len(text)} chars"
         )
 
         return cleaned_doc
@@ -143,8 +150,8 @@ class DocumentCleaner:
         text = UNICODE_DASH_PATTERN.sub("-", text)
 
         # Replace curly quotes with straight quotes
-        text = text.replace(""", '"').replace(""", '"')
-        text = text.replace("'", "'").replace("'", "'")
+        text = text.replace("“", '"').replace("”", '"')
+        text = text.replace("‘", "'").replace("’", "'")
 
         return text
 

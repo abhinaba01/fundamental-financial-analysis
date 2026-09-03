@@ -1,0 +1,18 @@
+{
+  "_comment": "Small worked example of the eval_kpi test-set format. Not FinQA - replace with the real test split for benchmark numbers. Values in millions USD.",
+  "samples": [
+    {
+      "text": "Total net sales of 383285 and gross margin of 169148 for fiscal 2023.",
+      "reference_kpis": {"revenue": 383285.0, "gross_margin": 169148.0, "eps": 6.13},
+      "extracted_kpis": {"revenue": 383285.0, "gross_margin": 169148.0},
+      "calculation_steps": [
+        {"operands": [169148.0, 383285.0], "operator": "/", "expected_result": 0.4413}
+      ]
+    },
+    {
+      "text": "Net income of 96995 and operating income of 114301 for fiscal 2023.",
+      "reference_kpis": {"net_income": 96995.0, "operating_income": 114301.0},
+      "extracted_kpis": {"net_income": 96995.0, "operating_income": 114000.0}
+    }
+  ]
+}

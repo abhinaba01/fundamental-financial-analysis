@@ -1,0 +1,11 @@
+{
+  "_comment": "Small worked example of the eval_sentiment test-set format. Not the Financial PhraseBank - replace with the real test split for benchmark numbers.",
+  "samples": [
+    {"text": "Operating profit rose to EUR 13.1 mn from EUR 8.7 mn a year earlier.", "sentiment": "positive", "prediction": "positive"},
+    {"text": "The company slipped to a pre-tax loss of EUR 2.4 mn.", "sentiment": "negative", "prediction": "negative"},
+    {"text": "The agreement covers the supply of components through 2026.", "sentiment": "neutral", "prediction": "neutral"},
+    {"text": "Net sales decreased to EUR 30.6 mn from EUR 35.1 mn.", "sentiment": "negative", "prediction": "neutral"},
+    {"text": "Cash flow from operations improved substantially year over year.", "sentiment": "positive", "prediction": "positive"},
+    {"text": "The board proposed an unchanged dividend of EUR 0.20 per share.", "sentiment": "neutral", "prediction": "positive"}
+  ]
+}
