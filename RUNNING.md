@@ -174,6 +174,24 @@ docker run --rm -p 8000:8000 \
 The volume mount persists the vector store across container restarts, so
 you don't re-embed everything every time you `docker run`.
 
+## 11. Run it on Google Colab (GPU)
+
+No GPU on your own machine? Everything above also runs unmodified on a
+Colab GPU runtime — `src/main.py` auto-detects CUDA via
+`torch.cuda.is_available()` and puts the embedding, NER, and sentiment
+models on the GPU automatically. No flags, no code changes.
+
+Open [`Run_On_Colab.ipynb`](Run_On_Colab.ipynb) in Colab
+(File → Open notebook → GitHub → paste this repo's URL, or upload the file
+directly) and run the cells top to bottom. It clones this repo, installs
+dependencies, optionally reads your `OPENAI_API_KEY` from Colab's Secrets
+manager, and runs the CLI on the bundled sample document — with a cell for
+uploading and analyzing your own document too.
+
+Set the runtime to a GPU first: **Runtime → Change runtime type → Hardware
+accelerator → GPU**. The pipeline still runs without one, just at the CPU
+speeds described in step 5 above.
+
 ## Troubleshooting things you'll actually hit
 
 **"No chunks above similarity threshold" / RAG says "Unable to answer"**
