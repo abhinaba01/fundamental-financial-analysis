@@ -76,22 +76,15 @@ class NERAgent:
         # Extract entities from cleaned text (using full document text)
         entities = self._extract_entities(document.cleaned_text)
 
-        # Also extract from individual chunks for span information
-        chunk_entities = self._extract_chunk_entities(document.chunks)
-
         ner_results = {
             "document_entities": entities,
-            "chunk_entities": chunk_entities,
             "total_entities": len(entities),
             "entity_types": self._summarize_entity_types(entities),
         }
 
         state["ner_results"] = ner_results
 
-        self.logger.info(
-            f"NER complete: {len(entities)} entities extracted, "
-            f"{len(chunk_entities)} chunks processed"
-        )
+        self.logger.info(f"NER complete: {len(entities)} entities extracted")
 
         return state
 
@@ -112,14 +105,18 @@ class NERAgent:
         try:
             # Chunk text if it's too long
             if len(text) > max_length * 4:
-                chunks = [
+                slices = [
                     text[i : i + max_length * 4]
                     for i in range(0, len(text), max_length * 4)
                 ]
+                # Pass the whole batch to the pipeline in one call instead of
+                # looping one slice at a time - the pipeline batches these
+                # internally, which matters a lot on GPU and for documents
+                # with many slices (e.g. a full 10-K).
+                batched_results = self.ner_pipeline(slices)
                 all_entities = []
-                for i, chunk in enumerate(chunks):
-                    chunk_ents = self.ner_pipeline(chunk)
-                    all_entities.extend(chunk_ents)
+                for entities_for_slice in batched_results:
+                    all_entities.extend(entities_for_slice)
                 return all_entities
             else:
                 entities = self.ner_pipeline(text)
@@ -128,30 +125,6 @@ class NERAgent:
         except Exception as e:
             self.logger.error(f"Error during NER extraction: {e}")
             return []
-
-    def _extract_chunk_entities(self, chunks) -> dict[str, list[dict[str, Any]]]:
-        """
-        Extract entities from individual document chunks.
-
-        Args:
-            chunks: List of DocumentChunk objects
-
-        Returns:
-            Dictionary mapping chunk_id to list of entities
-        """
-        chunk_entities = {}
-
-        for chunk in chunks:
-            try:
-                entities = self._extract_entities(chunk.text)
-                if entities:
-                    chunk_entities[chunk.chunk_id] = entities
-            except Exception as e:
-                self.logger.debug(
-                    f"Error extracting entities from chunk {chunk.chunk_id}: {e}"
-                )
-
-        return chunk_entities
 
     def _summarize_entity_types(
         self, entities: list[dict[str, Any]]

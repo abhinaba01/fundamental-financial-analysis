@@ -286,5 +286,38 @@ def test_embedding_pipeline_accepts_device_argument():
     assert "device" in sig.parameters
 
 
+def test_chunker_terminates_on_document_needing_multiple_chunks():
+    """Regression: once the sliding-window loop's chunk_end_token_idx got
+    clamped to len(tokens) (i.e. on the final chunk of any document long
+    enough to need more than one), chunk_start_token_idx = chunk_end_token_idx
+    - OVERLAP_TOKENS became a fixed value no longer dependent on the current
+    chunk_start_token_idx. The old post-hoc safety check (comparing the new
+    start index to len(tokens) - 1) could never be satisfied, so the loop
+    re-processed the same final chunk forever - a genuine infinite loop on
+    every real document over ~512 tokens, not merely a slow path."""
+    import threading
+
+    from src.preprocessing.document import ParsedDocument
+
+    # ~8000 tokens of repeated sentences - comfortably more than the 512
+    # token chunk size, so this must go through the sliding-window branch
+    # and reach the tail-clamping condition that used to hang forever.
+    long_text = "Apple Inc. reported quarterly revenue growth. " * 800
+    doc = ParsedDocument(cleaned_text=long_text)
+
+    chunker = SemanticChunker()
+    result = {}
+
+    def run():
+        result["chunked"] = chunker.chunk(doc)
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=30)
+
+    assert not thread.is_alive(), "chunker.chunk() did not terminate within 30s - infinite loop regression"
+    assert len(result["chunked"].chunks) > 1
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

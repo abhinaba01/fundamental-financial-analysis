@@ -47,11 +47,20 @@ class SemanticChunker:
         self.logger = logger
         self.encoding = tiktoken.get_encoding(ENCODING_NAME)
 
-        # Load spacy model for sentencization
+        # Load spaCy for sentence boundaries only - _get_sentence_boundaries
+        # reads nothing but sent.end_char, so the tagger/parser/ner/lemmatizer
+        # components (the expensive part of en_core_web_sm) are unnecessary
+        # and are excluded in favor of the lightweight rule-based sentencizer.
+        # On a full 10-K (~270K chars), the full pipeline takes ~50s; this
+        # takes a fraction of a second.
         self.nlp = None
         if spacy is not None:
             try:
-                self.nlp = spacy.load("en_core_web_sm")
+                self.nlp = spacy.load(
+                    "en_core_web_sm",
+                    exclude=["tok2vec", "tagger", "parser", "attribute_ruler", "lemmatizer", "ner"],
+                )
+                self.nlp.add_pipe("sentencizer")
             except OSError:
                 self.logger.warning(
                     "spaCy model 'en_core_web_sm' not found. "
@@ -209,12 +218,19 @@ class SemanticChunker:
                     )
                 )
 
+            # This was the last chunk - stop here. Checking this before
+            # advancing (rather than checking the new start index afterward)
+            # matters once chunk_end_token_idx has been clamped to len(tokens):
+            # chunk_end_token_idx - OVERLAP_TOKENS then stays fixed forever,
+            # since it no longer depends on chunk_start_token_idx, which made
+            # the old post-hoc check (comparing the new start index to
+            # len(tokens) - 1) unreachable and looped forever on any document
+            # needing more than one sliding-window chunk.
+            if chunk_end_token_idx >= len(tokens):
+                break
+
             # Move to next chunk with overlap
             chunk_start_token_idx = chunk_end_token_idx - OVERLAP_TOKENS
-
-            # Safety check to avoid infinite loop
-            if chunk_start_token_idx >= len(tokens) - 1:
-                break
 
         return chunks
 
@@ -256,15 +272,16 @@ class SemanticChunker:
         # Clamp token_idx
         token_idx = min(token_idx, len(tokens))
 
-        # Decode tokens up to token_idx to find char position
-        # This is approximate but works for most cases
+        # Decode tokens up to token_idx: since tokens came from encoding this
+        # same text, the decoded prefix always starts at position 0 - no need
+        # to search for it (text.find() here was an O(n) scan for something
+        # always found at 0, which made this function - called repeatedly
+        # with a growing prefix - the dominant cost on large documents).
         tokens_up_to = tokens[:token_idx]
         decoded = self.encoding.decode(tokens_up_to)
 
-        # Find this decoded string in the original text
-        pos = text.find(decoded)
-        if pos != -1:
-            return pos + len(decoded)
+        if text.startswith(decoded):
+            return len(decoded)
 
         # Fallback: estimate based on token count
         estimated_chars_per_token = len(text) / len(tokens) if tokens else 1

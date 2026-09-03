@@ -156,18 +156,18 @@ class SentimentAgent:
             return {"label": "neutral", "score": 0.0}
 
         try:
-            # Split text into sentences and analyze each
+            # Split text into sentences and analyze them as a single batch
+            # instead of one pipeline call per sentence - matters a lot for
+            # documents with many sentences, especially on GPU.
             sentences = text.split(".")[:50]
+            valid_sentences = [s[:512] for s in sentences if len(s.strip()) >= 5]
 
             sentiments = []
-            for sentence in sentences:
-                if len(sentence.strip()) < 5:
-                    continue
-
-                result = self.sentiment_pipeline(sentence[:512])
-                if result:
-                    label = result[0]["label"].lower()
-                    score = result[0]["score"]
+            if valid_sentences:
+                results = self.sentiment_pipeline(valid_sentences)
+                for result in results:
+                    label = result["label"].lower()
+                    score = result["score"]
 
                     # Convert to numerical scale
                     sentiment_value = SENTIMENT_LABEL_MAP.get(label, 0.0)
@@ -204,25 +204,31 @@ class SentimentAgent:
         """
         chunk_sentiments = {}
 
-        for chunk in chunks:
-            try:
-                if len(chunk.text.strip()) < 5:
-                    continue
+        # Batch all chunks into a single pipeline call instead of looping one
+        # at a time - for a document with hundreds of chunks this is the
+        # difference between hundreds of forward passes and a handful of
+        # batched ones, especially on GPU.
+        valid_chunks = [c for c in chunks if len(c.text.strip()) >= 5]
 
-                result = self.sentiment_pipeline(chunk.text[:512])
-                if result:
-                    label = result[0]["label"].lower()
-                    score = result[0]["score"]
+        if not valid_chunks:
+            return chunk_sentiments
 
-                    sentiment_value = SENTIMENT_LABEL_MAP.get(label, 0.0)
+        try:
+            texts = [chunk.text[:512] for chunk in valid_chunks]
+            results = self.sentiment_pipeline(texts)
 
-                    chunk_sentiments[chunk.chunk_id] = {
-                        "label": label,
-                        "score": sentiment_value * score,
-                        "confidence": score,
-                    }
-            except Exception as e:
-                self.logger.debug(f"Error analyzing chunk {chunk.chunk_id}: {e}")
+            for chunk, result in zip(valid_chunks, results):
+                label = result["label"].lower()
+                score = result["score"]
+                sentiment_value = SENTIMENT_LABEL_MAP.get(label, 0.0)
+
+                chunk_sentiments[chunk.chunk_id] = {
+                    "label": label,
+                    "score": sentiment_value * score,
+                    "confidence": score,
+                }
+        except Exception as e:
+            self.logger.debug(f"Error analyzing chunk sentiments: {e}")
 
         return chunk_sentiments
 
