@@ -3,8 +3,8 @@
 
 agents:
   ner:
-    model: "dslim/bert-base-NER"
-    description: "Named Entity Recognition using SEC-specific BERT"
+    model: "dslim/bert-large-NER"
+    description: "General-purpose named entity recognition (ORG/PER/LOC/MISC) - not finance-tuned, see src/agents/ner_agent.py"
     task: "ner"
     aggregation_strategy: "simple"
     device: "cuda"  # or "cpu"

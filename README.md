@@ -5,9 +5,9 @@ A production-ready LangGraph-based NLP pipeline for autonomous financial documen
 ## Overview
 
 This system extracts, analyzes, and synthesizes insights from financial documents using:
-- **Named Entity Recognition** (NER): Entity extraction via `nlpaueb/sec-bert-base`
+- **Named Entity Recognition** (NER): General-purpose entity extraction via `dslim/bert-large-NER` (ORG/PER/LOC/MISC - not finance-tuned; see [Measured Results](#measured-results-this-repo) below for why)
 - **Sentiment Analysis**: ProsusAI/finbert + tone detection
-- **KPI Extraction**: Financial metric extraction with safe Python calculations
+- **KPI Extraction**: Regex-based financial metric extraction with derived calculations
 - **Retrieval-Augmented Generation** (RAG): Evidence-based synthesis with re-query capability
 - **Report Synthesis**: Structured output combining all analysis results
 
@@ -21,11 +21,11 @@ Parser → Cleaner → Chunker → Embedder
 ParsedDocument         ChromaDB Vector Store
     ↓
 LangGraph Pipeline:
-    ├─ NER Agent (nlpaueb/sec-bert-base)
+    ├─ NER Agent (dslim/bert-large-NER)
     ├─ Sentiment Agent (ProsusAI/finbert)
-    ├─ KPI Agent (Qwen2.5-7B-Instruct)
+    ├─ KPI Agent (regex-based extraction, not an LLM)
     ├─ RAG Agent (BAAI/bge-large-en-v1.5 + gpt-4o)
-    │   └─ [Re-query if <3 chunks OR similarity <0.75]
+    │   └─ [Re-query if <3 chunks OR similarity <0.5]
     └─ Synthesis Agent
     ↓
 Final Report (JSON)
@@ -132,14 +132,18 @@ The API will be served at `http://0.0.0.0:8000`.
 - **Chunking**: 512 tokens max, 64 token overlap
 - **Embedding Model**: BAAI/bge-large-en-v1.5 (1024-dim)
 - **Vector Store**: ChromaDB (persistent at `data/vector_store/`)
-- **Retrieval**: Top-5 chunks, 0.75 cosine similarity threshold
+- **Retrieval**: Top-5 chunks, 0.5 cosine similarity threshold
 
 ### Agent Configuration (`configs/agents.yaml`)
 
+`configs/*.yaml` document intent but aren't loaded at runtime - the active
+values are the constants at the top of each agent module (see the
+Troubleshooting section below).
+
 - **Models**: Hardcoded for reproducibility
-- **NER**: nlpaueb/sec-bert-base
+- **NER**: dslim/bert-large-NER (general-purpose, not finance-tuned)
 - **Sentiment**: ProsusAI/finbert (main) + yiyanghkust/finbert-tone (tone)
-- **KPI**: Qwen2.5-7B-Instruct
+- **KPI**: Regex-based extraction (`src/agents/kpi_agent.py`), not an LLM
 - **RAG**: gpt-4o (requires OPENAI_API_KEY)
 
 Set `OPENAI_API_KEY` environment variable:
@@ -283,21 +287,23 @@ external datasets):
 
 | Module | Mode | Result |
 |--------|------|--------|
-| `eval_ner` | `--run-agent` (live `dslim/bert-base-NER`) | Precision 0.44, Recall 0.67, F1 0.53 |
+| `eval_ner` | `--run-agent` (live `dslim/bert-large-NER`) | Precision 0.44, Recall 0.67, F1 0.53 |
 | `eval_sentiment` | `--run-agent` (live `ProsusAI/finbert`) | Accuracy 1.00, Macro-F1 1.00 |
 | `eval_kpi` | `--run-agent` (live regex `KPIAgent`) | Numeric accuracy 0.83, Extraction recall 0.83 |
 | `eval_rag` | offline (hand-scored `retrieved_chunks`/`generated_answer`) | EM 0.50, ROUGE-L 0.50, Hit@5 1.00 |
 
-Two things the live NER run surfaces directly: it scores 0 on the
-`STOCK_EXCHANGE` entity type because `dslim/bert-base-NER` is a general-purpose
-NER model with no such label — the finance-specific `sec-bert-base` cited in
-the benchmark table below and in the architecture diagram is not what
-`src/agents/ner_agent.py` actually loads (`configs/agents.yaml` already
-reflects the `dslim` model; the architecture description and benchmark table
-don't). Similarly, `eval_kpi`'s live run uses the regex-based `KPIAgent` in
-`src/agents/kpi_agent.py`, not the `Qwen2.5-7B` LLM described in the benchmark
-table. Reproducing the benchmark table's numbers requires actually wiring up
-those models, not just pointing `--test-set` at the real datasets.
+The live NER run scores 0 on the `STOCK_EXCHANGE` entity type regardless of
+model size (`bert-base` and `bert-large` score identically on this 3-sample
+check) because neither `dslim/bert-*-NER` variant has that label at all — see
+`src/agents/ner_agent.py`'s module docstring for why there's no finance-tuned
+alternative for this entity set as of writing. `bert-large` does extract
+cleaner entity spans on messier real-document text (e.g. correctly capturing
+"Apple Inc." as one span instead of splitting it), just not something this
+tiny synthetic sample measures. Separately, `eval_kpi`'s live run uses the
+regex-based `KPIAgent` in `src/agents/kpi_agent.py`, not the `Qwen2.5-7B` LLM
+described in the benchmark table below - reproducing that table's numbers
+requires actually wiring up the models it names, not just pointing
+`--test-set` at the real datasets.
 
 ## Performance Benchmarks
 
@@ -305,6 +311,14 @@ Published reference numbers for the datasets and models named — **not**
 measurements of this repo's current agents. See "Measured Results" above for
 what the code as it stands actually produces, and the note above the table
 for where the two diverge (NER and KPI use different models than named here).
+
+The NER row is a bigger mismatch than "different model": FiNER-139 tags
+*numeric tokens* with 139 XBRL accounting concepts (e.g. is this figure
+"Revenue" or "NetIncomeLoss") - a different task from the ORG/PER/LOC/MISC
+entity tagging `NERAgent` actually does, closer in spirit to `KPIAgent`'s
+job than to named entity recognition. `sec-bert-base` itself is a base
+language model with no NER head; the 89.2% figure describes a fine-tuned
+variant from the FiNER-139 paper, not a model you can drop in as-is.
 
 | Component | Model | Benchmark | Expected |
 |-----------|-------|-----------|----------|

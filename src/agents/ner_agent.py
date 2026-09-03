@@ -1,11 +1,18 @@
 """
 NER Agent: Named Entity Recognition for financial documents.
 
-Uses nlpaueb/sec-bert-base fine-tuned on FiNER-139 to extract:
-- Company names, ticker symbols
-- Financial instruments (stocks, bonds, derivatives)
-- Financial metrics and measures
-- XBRL tags and accounting concepts
+Uses dslim/bert-large-NER (general-purpose CoNLL-trained NER, not
+finance-specific) to extract standard entity types:
+- ORG: organizations, companies
+- PER: people
+- LOC: locations
+- MISC: other named entities
+
+There is no finance-tuned model publicly available for this entity set
+(company/person/location) as of writing - nlpaueb/sec-bert-base is a base
+language model with no NER head, and FiNER-139 (the benchmark historically
+cited here) tags numeric tokens with XBRL accounting concepts, which is a
+different task entirely, closer to KPI extraction than to this agent.
 
 Input: GraphState with document, chunks populated
 Output: GraphState with ner_results populated
@@ -26,7 +33,7 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Model configuration
-MODEL_NAME = "dslim/bert-base-NER"
+MODEL_NAME = "dslim/bert-large-NER"
 
 
 class NERAgent:
