@@ -1,0 +1,14 @@
+# Training-only dependencies for Train_FinBERT_NER_Colab.ipynb.
+# Not required to run the app - see requirements.txt for that.
+#
+# datasets is pinned below 4.0 deliberately, not as a style choice:
+# nlpaueb/finer-139 is a legacy loading-script dataset (ships finer-139.py,
+# not Parquet), and datasets>=4.0 removed script execution entirely.
+# Confirmed by actually running load_dataset("nlpaueb/finer-139", ...)
+# against datasets==4.6.1, which fails with:
+#   RuntimeError: Dataset scripts are no longer supported
+# trust_remote_code=True is also required at load time within this range
+# (Hub-side opt-in for script execution).
+datasets>=2.19,<4.0
+seqeval>=1.2.2
+accelerate>=0.26.0

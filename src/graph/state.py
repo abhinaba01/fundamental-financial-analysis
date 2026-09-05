@@ -25,6 +25,8 @@ class GraphState(TypedDict):
         ner_results: Named entity extraction results
         sentiment_results: Sentiment analysis results dictionary
         kpi_results: Key performance indicator extraction results
+        financial_entities: XBRL-tagged financial figures (fine-tuned model;
+            empty until a trained model is available - see FinancialNERAgent)
         cot_reasoning: Chain-of-thought reasoning trace for transparency
         final_answer: Synthesized answer from the RAG agent
         report: Final structured report with all findings
@@ -38,6 +40,7 @@ class GraphState(TypedDict):
     ner_results: list[dict[str, Any]]
     sentiment_results: dict[str, Any]
     kpi_results: dict[str, Any]
+    financial_entities: list[dict[str, Any]]
     cot_reasoning: str
     final_answer: str
     report: dict[str, Any]

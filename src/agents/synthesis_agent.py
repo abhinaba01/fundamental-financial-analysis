@@ -65,6 +65,7 @@ class SynthesisAgent:
         ner_results = state.get("ner_results", {})
         sentiment_results = state.get("sentiment_results", {})
         kpi_results = state.get("kpi_results", {})
+        financial_entities = state.get("financial_entities", [])
         cot_reasoning = state.get("cot_reasoning", "")
         final_answer = state.get("final_answer", "")
         retrieved_chunks = state.get("retrieved_chunks", [])
@@ -89,6 +90,7 @@ class SynthesisAgent:
             "named_entities": self._format_ner_results(ner_results),
             "sentiment_analysis": self._format_sentiment_results(sentiment_results),
             "financial_metrics": self._format_kpi_results(kpi_results),
+            "financial_entities": self._format_financial_entities(financial_entities),
             "reasoning": {
                 "chain_of_thought": cot_reasoning,
                 "final_answer": final_answer,
@@ -152,6 +154,35 @@ class SynthesisAgent:
             "entity_types": entity_types,
             "sample_entities": doc_entities[:10],
             "unique_entity_types": len(entity_types),
+        }
+
+    def _format_financial_entities(
+        self, financial_entities: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        """
+        Format FinancialNERAgent's tagged financial figures for the report.
+
+        Empty until a fine-tuned model has been trained and pushed to the
+        Hub - see src/agents/financial_ner_agent.py.
+
+        Args:
+            financial_entities: Raw tagged spans from FinancialNERAgent
+
+        Returns:
+            Formatted financial-entities section
+        """
+        if not financial_entities:
+            return {"total_tagged": 0, "tag_counts": {}, "sample_entities": []}
+
+        tag_counts: dict[str, int] = {}
+        for entity in financial_entities:
+            tag = entity.get("tag", "unknown")
+            tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+        return {
+            "total_tagged": len(financial_entities),
+            "tag_counts": tag_counts,
+            "sample_entities": financial_entities[:15],
         }
 
     def _format_sentiment_results(self, sentiment_results: dict[str, Any]) -> dict[str, Any]:
