@@ -1,8 +1,6 @@
 # Financial Fundamentals Analysis System
 
-[![tests](https://github.com/abhinaba01/fundamental-financial-analysis/actions/workflows/tests.yml/badge.svg)](https://github.com/abhinaba01/fundamental-financial-analysis/actions/workflows/tests.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+
 
 A LangGraph-based NLP pipeline for financial document analysis: it parses a
 filing, indexes it for retrieval, and runs a graph of specialized agents (NER,
