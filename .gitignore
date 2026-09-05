@@ -62,3 +62,10 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# ── Generated Analysis Reports ────────────────────────────────────────
+# Output of a pipeline run, per README/RUNNING examples. Anchored to the repo
+# root so data/eval/*.json and configs stay tracked.
+/report.json
+/*_report.json
+/apple_10k_analysis.json

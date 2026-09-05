@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "financial-fundamentals-analysis"
+version = "0.1.0"
+description = "LangGraph pipeline for extracting entities, sentiment, KPIs, and RAG answers from financial filings"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Abhinaba Mandal" }]
+keywords = ["nlp", "langgraph", "rag", "finance", "sec-filings"]
+classifiers = [
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "langgraph>=0.1.0",
+    "langchain>=0.1.0",
+    "langchain-openai>=0.1.0",
+    "openai>=1.0.0",
+    "transformers>=4.36.0",
+    "torch>=2.0.0",
+    "sentence-transformers>=2.3.0",
+    "spacy>=3.7.0",
+    "pdfplumber>=0.10.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+    "chromadb>=0.4.0",
+    "tiktoken>=0.5.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+    "requests>=2.31.0",
+    "aiohttp>=3.9.0",
+    "fastapi>=0.109.0",
+    "uvicorn>=0.23.0",
+    "python-multipart>=0.0.6",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+# httpx is required by fastapi.testclient.TestClient (tests/test_api.py).
+# It arrives transitively via `openai` today, but the test suite depends on
+# it directly, so it is pinned here rather than left to chance.
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "httpx>=0.24.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.7.0",
+    "isort>=5.13.0",
+]
+
+[project.scripts]
+financial-analysis = "src.main:main"
+
+[project.urls]
+Repository = "https://github.com/abhinaba01/fundamental-financial-analysis"
+
+[tool.setuptools.packages.find]
+include = ["src*", "evaluation*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

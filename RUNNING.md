@@ -39,9 +39,13 @@ just call the venv's Python directly without activating:
 
 ```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -e ".[dev]"
 python -m spacy download en_core_web_sm
 ```
+
+(`pip install -r requirements.txt` also works and installs the same runtime
+dependencies; the editable install additionally pulls in the test tooling and
+makes `src` importable from anywhere.)
 
 This installs `torch`, `transformers`, `chromadb`, `langgraph`, and friends.
 Expect this to take several minutes and pull a few GB — `torch` alone is
@@ -73,7 +77,7 @@ The repo ships a couple of tiny test documents so you don't need a real
 10-K on hand for a first run.
 
 ```bash
-python -m src.main --document test_small.txt --query "What is the revenue and gross margin?" --output report.json --cpu
+python -m src.main --document data/samples/small_filing.txt --query "What is the revenue and gross margin?" --output report.json --cpu
 ```
 
 **What happens, in order, and roughly how long each stage takes on CPU:**
@@ -87,7 +91,7 @@ python -m src.main --document test_small.txt --query "What is the revenue and gr
    on a first run**: the model itself is ~1.3GB and downloads once, then
    gets cached in `~/.cache/huggingface/hub/`. Budget 3-5 minutes the very
    first time; seconds on every run after
-5. **Run the analysis graph**: NER (`dslim/bert-base-NER`), sentiment
+5. **Run the analysis graph**: NER (`dslim/bert-large-NER`), sentiment
    (`ProsusAI/finbert`), KPI extraction (regex-based, no model), then RAG
    (retrieval + generation). NER and sentiment models are smaller and
    download in under a minute the first time
@@ -106,7 +110,7 @@ chain-of-thought if you set an API key), and a `summary` string.
 Point `--document` at any `.pdf`, `.txt`, `.html`, or `.json` file:
 
 ```bash
-python -m src.main --document AAPL_10K.pdf --query "What are the primary risk factors?" --output aapl_report.json --cpu
+python -m src.main --document data/samples/AAPL_10K.pdf --query "What are the primary risk factors?" --output aapl_report.json --cpu
 ```
 
 PDFs take noticeably longer to parse than text — `pdfplumber` extracts text
@@ -127,7 +131,7 @@ Then, from another terminal:
 curl -X POST "http://127.0.0.1:8000/analyze" \
   -F "query=What are the key risks?" \
   -F "use_gpu=false" \
-  -F "document=@test_small.txt"
+  -F "document=@data/samples/small_filing.txt"
 ```
 
 The response is the same JSON structure as the CLI's `report.json`.
@@ -138,9 +142,11 @@ The response is the same JSON structure as the CLI's `report.json`.
 pytest tests/ -v
 ```
 
-Should show `19 passed`. The first run loads the NER and sentiment models
-(same one-time download cost as step 5), so it isn't instant, but it
-doesn't touch the embedding model or ChromaDB.
+Should show `32 passed` — 20 pipeline tests plus 12 for the HTTP API. The
+first run loads the NER and sentiment models (same one-time download cost as
+step 5), so it isn't instant, but it doesn't touch the embedding model or
+ChromaDB. The API tests monkeypatch the pipeline, so they load no models
+at all.
 
 ## 9. Run the evaluation harnesses
 

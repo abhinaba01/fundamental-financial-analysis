@@ -1,12 +1,19 @@
 # Financial Fundamentals Analysis System
 
-A production-ready LangGraph-based NLP pipeline for autonomous financial document analysis.
+[![tests](https://github.com/abhinaba01/fundamental-financial-analysis/actions/workflows/tests.yml/badge.svg)](https://github.com/abhinaba01/fundamental-financial-analysis/actions/workflows/tests.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+
+A LangGraph-based NLP pipeline for financial document analysis: it parses a
+filing, indexes it for retrieval, and runs a graph of specialized agents (NER,
+sentiment, KPI extraction, RAG) to produce a single structured JSON report.
 
 ## Overview
 
 This system extracts, analyzes, and synthesizes insights from financial documents using:
 - **Named Entity Recognition** (NER): General-purpose entity extraction via `dslim/bert-large-NER` (ORG/PER/LOC/MISC - not finance-tuned; see [Measured Results](#measured-results-this-repo) below for why)
-- **Sentiment Analysis**: ProsusAI/finbert + tone detection
+- **Sentiment Analysis**: ProsusAI/finbert, plus a tone pass (the tone model
+  currently fails to load and falls back to FinBERT — see [Configuration](#agent-configuration-configsagentsyaml))
 - **KPI Extraction**: Regex-based financial metric extraction with derived calculations
 - **Retrieval-Augmented Generation** (RAG): Evidence-based synthesis with re-query capability
 - **Report Synthesis**: Structured output combining all analysis results
@@ -34,38 +41,50 @@ Final Report (JSON)
 ## Installation
 
 ### Requirements
-- Python 3.11+
-- CUDA 12.1+ (recommended for GPU acceleration)
+- Python 3.10+ (developed and tested on 3.10.10)
+- CUDA 12.1+ (optional - the pipeline auto-detects a GPU and falls back to CPU)
 - 16GB+ RAM
+- ~3.5GB disk for model weights
 
 ### Setup
 
 ```bash
 # Clone repository
-git clone <repo_url>
-cd financial-fundamental-analysis
+git clone https://github.com/abhinaba01/fundamental-financial-analysis.git
+cd fundamental-financial-analysis
 
 # Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
-# Install dependencies
-pip install -r requirements.txt
+# Install the project (add [dev] for the test suite)
+pip install -e ".[dev]"
+python -m spacy download en_core_web_sm
 
-# Download models (first run, ~30GB total)
+# Optional: pre-download model weights (~3.5GB) instead of paying
+# the download cost mid-run on first use
 python scripts/download_models.py
 ```
+
+For a step-by-step walkthrough from a clean checkout — including timings,
+Docker, Colab, and the errors you are likely to hit — see [RUNNING.md](RUNNING.md).
 
 ## Quick Start
 
 ### CLI Usage
 
+Sample filings ship with the repo under `data/samples/`, so a first run needs
+nothing downloaded:
+
 ```bash
 python -m src.main \
-  --document data/raw/AAPL_10K_2023.json \
+  --document data/samples/AAPL_10K.pdf \
   --query "What are the main business risks?" \
   --output report.json
 ```
+
+`data/samples/small_filing.txt` is a much smaller document if you just want to
+watch the pipeline run end to end quickly.
 
 
 ### Programmatic Usage
@@ -74,7 +93,7 @@ python -m src.main \
 from src.main import run_analysis
 
 report = run_analysis(
-    document_path="data/raw/AAPL_10K_2023.json",
+    document_path="data/samples/AAPL_10K.pdf",
     query="What is the revenue trend over the last 3 years?"
 )
 
@@ -97,7 +116,7 @@ uvicorn src.api:app --host 0.0.0.0 --port 8000
 curl -X POST "http://127.0.0.1:8000/analyze" \
   -F "query=What are the key risks?" \
   -F "use_gpu=false" \
-  -F "document=@data/raw/AAPL_10K_2023.json"
+  -F "document=@data/samples/AAPL_10K.pdf"
 ```
 
 ### Response
@@ -142,7 +161,12 @@ Troubleshooting section below).
 
 - **Models**: Hardcoded for reproducibility
 - **NER**: dslim/bert-large-NER (general-purpose, not finance-tuned)
-- **Sentiment**: ProsusAI/finbert (main) + yiyanghkust/finbert-tone (tone)
+- **Sentiment**: ProsusAI/finbert (main) + yiyanghkust/finbert-tone (tone) —
+  in practice the tone model **does not load** on current `transformers`
+  versions (its `config.json` has no `model_type` key), so `SentimentAgent`
+  logs a warning and falls back to running the primary model for tone as
+  well. Tone output is therefore FinBERT sentiment, not a distinct signal,
+  until that model is replaced.
 - **KPI**: Regex-based extraction (`src/agents/kpi_agent.py`), not an LLM
 - **RAG**: gpt-4o (requires OPENAI_API_KEY)
 
@@ -274,11 +298,17 @@ different samples cannot cross-match).
 
 ### Measured Results (this repo)
 
-Test suite: **19/19 passed** (`pytest tests/`) — 13 smoke tests plus 6 regression
-tests added for bugs found and fixed during a pipeline audit (KPI regex group
-misalignment, gross-margin/dollar-amount conflation, smart-quote normalization,
-financial-notation word-boundary corruption, retrieved-chunk id/type coercion,
-and the `EmbeddingPipeline` constructor signature).
+Test suite: **32/32 passed** (`pytest tests/`), split as:
+
+- `tests/test_pipeline.py` (20) — 13 smoke tests plus 7 regression tests, each
+  pinning a bug found and fixed during a pipeline audit: KPI regex group
+  misalignment, gross-margin/dollar-amount conflation, smart-quote
+  normalization, financial-notation word-boundary corruption, retrieved-chunk
+  id/type coercion, the `EmbeddingPipeline` constructor signature, and a
+  chunker infinite loop on any document over ~512 tokens.
+- `tests/test_api.py` (12) — HTTP contract for the FastAPI wrapper: status
+  codes, upload handling, argument pass-through, and numpy serialization, with
+  `run_analysis` monkeypatched so no models load.
 
 Evaluation CLIs run against the worked examples in `data/eval/` (2-6 samples
 each — sanity checks that the harness and agents work end-to-end, **not** a
@@ -299,33 +329,40 @@ check) because neither `dslim/bert-*-NER` variant has that label at all — see
 alternative for this entity set as of writing. `bert-large` does extract
 cleaner entity spans on messier real-document text (e.g. correctly capturing
 "Apple Inc." as one span instead of splitting it), just not something this
-tiny synthetic sample measures. Separately, `eval_kpi`'s live run uses the
-regex-based `KPIAgent` in `src/agents/kpi_agent.py`, not the `Qwen2.5-7B` LLM
-described in the benchmark table below - reproducing that table's numbers
-requires actually wiring up the models it names, not just pointing
-`--test-set` at the real datasets.
+tiny synthetic sample measures.
 
-## Performance Benchmarks
+## Roadmap / Future Work
 
-Published reference numbers for the datasets and models named — **not**
-measurements of this repo's current agents. See "Measured Results" above for
-what the code as it stands actually produces, and the note above the table
-for where the two diverge (NER and KPI use different models than named here).
+Where this pipeline currently stands against what the literature achieves on
+the same tasks, and what closing each gap would actually require. **Nothing in
+this section is a measurement of this repo** — see [Measured Results](#measured-results-this-repo)
+above for that.
 
-The NER row is a bigger mismatch than "different model": FiNER-139 tags
-*numeric tokens* with 139 XBRL accounting concepts (e.g. is this figure
-"Revenue" or "NetIncomeLoss") - a different task from the ORG/PER/LOC/MISC
-entity tagging `NERAgent` actually does, closer in spirit to `KPIAgent`'s
-job than to named entity recognition. `sec-bert-base` itself is a base
-language model with no NER head; the 89.2% figure describes a fine-tuned
-variant from the FiNER-139 paper, not a model you can drop in as-is.
+**1. Financial NER (XBRL figure tagging).** `NERAgent` tags ORG/PER/LOC/MISC
+with a general-purpose model. The finance-specific task — tagging *numeric
+tokens* with XBRL accounting concepts, e.g. deciding whether a figure is
+`Revenues` or `NetIncomeLoss` — is a genuinely different problem, closer to
+what `KPIAgent` does than to named entity recognition. The FiNER-139 paper
+reports 89.2% F1 for a fine-tuned `sec-bert-base` variant; the published
+`sec-bert-base` is a base language model with no NER head, so this needs an
+actual fine-tune, not a model swap. Work in progress on the
+`feature/financial-ner` branch.
 
-| Component | Model | Benchmark | Expected |
-|-----------|-------|-----------|----------|
-| NER | sec-bert-base | FiNER-139 F1 | 89.2% |
-| Sentiment | finbert | Financial PhraseBank Acc | 97% |
-| RAG EM | gpt-4o + BGE | FinanceBench | ~75% |
-| KPI Accuracy | Qwen2.5-7B | FinQA | 80%+ |
+**2. LLM-based KPI reasoning.** `KPIAgent` is regex-based. Multi-step
+numerical reasoning over filings (the FinQA task, where models like Qwen2.5-7B
+reach 80%+) would need a model in the loop with a calculation tool, replacing
+pattern matching for anything beyond direct figure extraction.
+
+**3. Benchmarking on full datasets.** The evaluation harnesses run against
+2-6 sample worked examples. Pointing them at converted Financial PhraseBank
+(finbert reference: ~97% accuracy) and FinanceBench (gpt-4o + BGE reference:
+~75% EM) splits would produce numbers comparable to published results — the
+harnesses already accept these formats, the datasets just aren't vendored here.
+
+**4. Config files that actually load.** `configs/*.yaml` currently document
+intent only; thresholds live as constants in `src/graph/edges.py` and
+`src/agents/rag_agent.py`. Wiring the YAML through would remove a real
+footgun (see [Troubleshooting](#re-query-loops)).
 
 ## Advanced Usage
 
@@ -349,14 +386,25 @@ results = embedder.retrieve("What is the revenue?", top_k=5)
 
 ### Custom Agent Pipeline
 
+Every agent node can be swapped for your own. Each is a plain callable taking
+and returning a `GraphState`, so anything with a `__call__(state) -> state` works;
+agents left as `None` are constructed with their defaults.
+
 ```python
 from src.graph.builder import AnalysisPipelineBuilder
-from src.agents.custom_agent import MyCustomAgent
+
+class MyKPIAgent:
+    def __call__(self, state):
+        state["kpi_results"] = {...}
+        return state
 
 builder = AnalysisPipelineBuilder(
-    custom_agents={"my_agent": MyCustomAgent()}
+    embedding_pipeline=embedder,
+    kpi_agent=MyKPIAgent(),   # ner_agent, sentiment_agent, rag_agent,
+    device="cpu",             # and synthesis_agent are also overridable
 )
 graph = builder.build()
+report = graph.invoke(initial_state)["report"]
 ```
 
 ## Troubleshooting
@@ -379,10 +427,10 @@ not near 1.0, so raising this much above ~0.65 will send most queries into
 the retry loop regardless of retrieval quality.
 
 ### Slow Embedding
-```bash
-# Reduce batch size
-python -m src.main --batch-size 8 --document file.pdf --query "..."
-```
+The first run downloads `BAAI/bge-large-en-v1.5` (~1.3GB); run
+`python scripts/download_models.py` up front to get that out of the way.
+After that, embedding batch size is the `BATCH_SIZE` constant in
+`src/preprocessing/embedder.py` — there is no CLI flag for it.
 
 ## File Structure
 
@@ -414,25 +462,32 @@ python -m src.main --batch-size 8 --document file.pdf --query "..."
 │   ├── eval_rag.py            # FinanceBench
 │   └── eval_kpi.py            # FinQA
 ├── configs/
-│   ├── agents.yaml            # Agent configuration
-│   └── pipeline.yaml          # Pipeline settings
+│   ├── agents.yaml            # Reference only - not loaded at runtime
+│   └── pipeline.yaml          # Reference only - not loaded at runtime
+├── scripts/
+│   └── download_models.py     # Pre-download model weights
 ├── tests/
-│   └── test_pipeline.py       # Basic tests
+│   ├── test_pipeline.py       # Preprocessing + agent unit/regression tests
+│   └── test_api.py            # FastAPI endpoint contract tests
+├── .github/workflows/
+│   └── tests.yml              # CI: pytest on 3.10 and 3.11
 └── data/
-    ├── raw/                   # Input documents
-    ├── processed/             # Intermediate
+    ├── samples/               # Sample filings, committed (see Quick Start)
+    ├── raw/                   # Your own input documents (gitignored)
+    ├── processed/             # Intermediate (gitignored)
     ├── eval/                  # Example test sets for the eval CLIs
-    └── vector_store/          # ChromaDB persistence
+    └── vector_store/          # ChromaDB persistence (gitignored)
 ```
 
 ## Model Lock-in
 
 All models are hardcoded for reproducibility. To modify:
 
-1. **NER Model**: Edit `src/agents/ner_agent.py`
-2. **Sentiment Models**: Edit `src/agents/sentiment_agent.py`
-3. **Embedding Model**: Edit `src/preprocessing/embedder.py`
-4. **LLM Models**: Edit `configs/agents.yaml`
+1. **NER Model**: `MODEL_NAME` in `src/agents/ner_agent.py`
+2. **Sentiment Models**: `PRIMARY_MODEL` / `SECONDARY_MODEL` in `src/agents/sentiment_agent.py`
+3. **Embedding Model**: `MODEL_NAME` in `src/preprocessing/embedder.py`
+4. **LLM Model**: `GENERATION_MODEL` in `src/agents/rag_agent.py` — *not*
+   `configs/agents.yaml`, which is documentation only and is never loaded at runtime
 
 ## API Keys
 
@@ -442,26 +497,26 @@ export OPENAI_API_KEY="sk-..."  # For RAG generation
 export HF_TOKEN="hf_..."         # For HuggingFace model access
 ```
 
+## Development
+
+```bash
+pip install -e ".[dev]"
+python -m spacy download en_core_web_sm
+pytest tests/ -v
+```
+
+CI runs the same suite on Python 3.10 and 3.11 for every push and pull request
+to `main` (see [.github/workflows/tests.yml](.github/workflows/tests.yml)).
+
+Branches:
+- `main` — everything documented here, tests green
+- `feature/financial-ner` — XBRL figure tagging, blocked on training and
+  publishing the fine-tuned model (see [Roadmap](#roadmap--future-work))
+
 ## License
 
-[License type here]
-
-## Contributing
-
-[Contribution guidelines here]
-
-## Citation
-
-[Citation information if applicable]
+MIT — see [LICENSE](LICENSE).
 
 ## Support
 
-For issues or questions:
-- Documentation: [Wiki link]
-- Issues: [GitHub Issues]
-- Discussions: [GitHub Discussions]
-
----
-
-**Last Updated**: 2024-01-15  
-**Status**: Production Ready
+Bug reports and questions: [GitHub Issues](https://github.com/abhinaba01/fundamental-financial-analysis/issues).
