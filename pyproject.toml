@@ -57,6 +57,15 @@ dev = [
     "isort>=5.13.0",
 ]
 
+# Needed only by scripts/prepare_eval_datasets.py, to download the benchmark
+# datasets. Pinned below 4.0 deliberately: takala/financial_phrasebank is a
+# legacy loading-script dataset, and datasets>=4.0 removed script execution
+# entirely ("RuntimeError: Dataset scripts are no longer supported").
+eval = [
+    "datasets>=2.19,<4.0",
+    "seqeval>=1.2.2",
+]
+
 [project.scripts]
 financial-analysis = "src.main:main"
 

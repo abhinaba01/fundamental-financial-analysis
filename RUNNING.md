@@ -162,6 +162,20 @@ python -m evaluation.eval_kpi --test-set data/eval/kpi_example.json
 python -m evaluation.eval_rag --test-set data/eval/rag_example.json
 ```
 
+Those are sanity checks, not benchmarks. For real numbers, download and convert
+the actual datasets first:
+
+```bash
+pip install -e ".[eval]"
+python scripts/prepare_eval_datasets.py --all
+python -m evaluation.eval_sentiment --test-set data/eval/phrasebank_test.json --run-agent
+```
+
+Budget a few minutes for the sentiment run (2,264 sentences, unbatched on CPU).
+The RAG benchmark needs its corpus embedded first via
+`scripts/index_eval_corpus.py`, which takes ~12 minutes on CPU — the evidence
+passages are long and BGE-large is a 335M-parameter model.
+
 Add `--run-agent` to NER/sentiment/KPI to score live model output instead of
 the hand-written predictions baked into those example files (see
 [README.md](README.md#measured-results-this-repo) for what that actually

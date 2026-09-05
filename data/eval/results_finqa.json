@@ -1,0 +1,16 @@
+{
+  "aggregation": "macro (mean across samples)",
+  "samples_evaluated": 545,
+  "numeric_accuracy": 0.0,
+  "extraction_recall": 0.0,
+  "type_coverage": 0.0,
+  "mean_absolute_error": 0.0,
+  "mean_rmse": 0.0,
+  "per_type_accuracy": {},
+  "total_reference_kpis": 0,
+  "calculations": {
+    "calculation_accuracy": 0.46605504587155966,
+    "correct_steps": 254,
+    "total_steps": 545
+  }
+}

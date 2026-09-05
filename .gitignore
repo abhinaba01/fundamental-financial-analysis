@@ -63,6 +63,14 @@ build/
 .coverage
 htmlcov/
 
+# ── Converted Benchmark Datasets ──────────────────────────────────────
+# Multi-MB derived copies of public datasets. Regenerate in one command:
+#   python scripts/prepare_eval_datasets.py --all
+# The hand-written *_example.json files and the results_*.json metrics stay
+# tracked - those are inputs and evidence, not bulk derived data.
+data/eval/*_test.json
+data/eval_vector_store/
+
 # ── Generated Analysis Reports ────────────────────────────────────────
 # Output of a pipeline run, per README/RUNNING examples. Anchored to the repo
 # root so data/eval/*.json and configs stay tracked.

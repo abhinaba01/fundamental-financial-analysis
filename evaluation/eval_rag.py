@@ -305,22 +305,36 @@ def _chunk_identity(chunk: Any) -> dict[str, str]:
     return {"id": " ".join(str(chunk).split()).lower()}
 
 
-def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
+def _predict_with_agent(
+    samples: list[dict[str, Any]],
+    collection: str | None = None,
+    vector_store: str | None = None,
+) -> None:
     """
     Populate each sample's retrieval and generation output by running RAGAgent.
 
     Retrieval runs against the persistent ChromaDB collection, so the corpus
-    must already be indexed (e.g. via ``python -m src.main``). Building the
-    EmbeddingPipeline needs OPENAI_API_KEY.
+    must already be indexed (e.g. via ``python -m src.main``, or
+    ``scripts/index_eval_corpus.py`` for a benchmark corpus).
 
     Args:
         samples: Test-set samples, mutated in place
+        collection: ChromaDB collection to retrieve from (default: the
+            pipeline's own collection). Point this at a benchmark corpus to
+            keep evaluation runs out of the working vector store.
+        vector_store: Path to the ChromaDB store holding that collection
     """
     from src.agents.rag_agent import RAGAgent
     from src.preprocessing.embedder import EmbeddingPipeline
 
+    overrides: dict[str, Any] = {}
+    if collection:
+        overrides["collection_name"] = collection
+    if vector_store:
+        overrides["vector_store_path"] = vector_store
+
     try:
-        embedder = EmbeddingPipeline()
+        embedder = EmbeddingPipeline(**overrides)
     except (ImportError, ValueError) as exc:
         raise SystemExit(
             f"Cannot run the RAG agent: {exc}\n"
@@ -375,12 +389,26 @@ def main() -> None:
             "vector store (needs OPENAI_API_KEY)"
         ),
     )
+    parser.add_argument(
+        "--collection",
+        default=None,
+        help=(
+            "ChromaDB collection to retrieve from. Use with a benchmark corpus "
+            "indexed by scripts/index_eval_corpus.py so evaluation runs do not "
+            "read from, or write into, the working vector store."
+        ),
+    )
+    parser.add_argument(
+        "--vector-store",
+        default=None,
+        help="Path to the ChromaDB store holding --collection",
+    )
     args = parser.parse_args()
 
     samples = load_samples(args)
 
     if args.run_agent:
-        _predict_with_agent(samples)
+        _predict_with_agent(samples, collection=args.collection, vector_store=args.vector_store)
 
     evaluator = RAGEvaluator()
 

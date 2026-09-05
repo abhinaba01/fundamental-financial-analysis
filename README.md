@@ -245,9 +245,24 @@ python -m evaluation.eval_rag --test-set data/eval/rag_example.json
 python -m evaluation.eval_kpi --test-set data/eval/kpi_example.json
 ```
 
-The files in `data/eval/` are small worked examples of each format, not the real
-test splits. Point `--test-set` at a converted FiNER-139 / Financial PhraseBank /
-FinanceBench / FinQA split to reproduce the benchmark numbers below.
+The `*_example.json` files in `data/eval/` are small worked examples of each
+format, not real test splits. To download and convert the actual benchmarks:
+
+```bash
+pip install -e ".[eval]"
+python scripts/prepare_eval_datasets.py --all      # writes data/eval/*_test.json
+```
+
+That fetches Financial PhraseBank, FinanceBench and FinQA and converts each into
+the test-set format below. See [Benchmark Results](#benchmark-results-real-datasets)
+for what they score and — more importantly — what each number does and does not
+mean. RAG additionally needs its corpus indexed first:
+
+```bash
+python scripts/index_eval_corpus.py                # own collection, not your working store
+python -m evaluation.eval_rag --test-set data/eval/financebench_test.json --run-agent \
+    --collection financebench_eval --vector-store data/eval_vector_store
+```
 
 ### Flags
 
@@ -348,17 +363,67 @@ The re-query loop is also live now rather than structurally unreachable — on
 `small_filing.txt` it fires twice and the reformulated query lifts average
 retrieval similarity from 0.593 to 0.643.
 
-Evaluation CLIs run against the worked examples in `data/eval/` (2-6 samples
-each — sanity checks that the harness and agents work end-to-end, **not** a
-reproduction of the published benchmarks below, which are measured on the full
-external datasets):
+### Benchmark Results (real datasets)
+
+Measured on the actual benchmark datasets, not the worked examples. Reproduce
+with:
+
+```bash
+pip install -e ".[eval]"
+python scripts/prepare_eval_datasets.py --all
+python -m evaluation.eval_sentiment --test-set data/eval/phrasebank_test.json --run-agent
+```
+
+| Task | Dataset | n | Metric | Measured | Published reference |
+|------|---------|---:|--------|---------:|--------------------|
+| Sentiment | Financial PhraseBank (`sentences_allagree`) | 2,264 | Accuracy | **0.972** | ~0.97 (FinBERT paper) |
+| | | | Macro-F1 | **0.963** | — |
+| KPI calculation | FinQA (single-op subset) | 545 | Calculation accuracy | **0.466** raw / **0.868** adjusted | 80%+ (Qwen2.5-7B, *full* task) |
+
+**The sentiment number is not evidence of generalization.** `ProsusAI/finbert`
+was fine-tuned on Financial PhraseBank, so evaluating it here scores the model
+on its own training data. It reproduces the published figure almost exactly
+(0.972 vs ~0.97), which is a useful check that the harness is wired up
+correctly — and nothing more than that. Per-class F1: negative 0.943, neutral
+0.983, positive 0.962.
+
+**The FinQA number needs unpacking, and the unpacking is the interesting part.**
+Raw calculation accuracy is 0.466, which looks like broken arithmetic. It isn't
+— the loss is concentrated almost entirely in one operator:
+
+| Operator | Accuracy | n |
+|----------|---------:|--:|
+| `*` | 1.000 | 25 |
+| `-` | 0.937 | 127 |
+| `+` | 0.900 | 50 |
+| `/` | **0.190** | 343 |
+
+FinQA states the answer to a ratio question as a percentage (`14.0`) while
+`divide` returns the ratio (`0.1446`). 219 of the 343 division steps match the
+gold answer exactly once scaled by 100 — so 40% of the whole test set is a unit
+convention, not an arithmetic error. Accounting for it gives 0.868.
+`scripts/analyze_finqa_calculations.py` reproduces that breakdown. The test set
+is deliberately *not* rescaled to make the metric pass: the mismatch is a real
+property of mapping FinQA onto this harness, and editing the ground truth to
+agree with the code would measure nothing.
+
+Two scoping notes on FinQA: only single-operation programs are converted (545
+of 1,147; the rest are multi-step), and this measures the harness's calculation
+engine, **not** `KPIAgent`. FinQA is multi-step numerical reasoning over
+filings; `KPIAgent` is a regex extractor for eight named KPI types and cannot
+do that task at all. `reference_kpis` is therefore empty in the converted set,
+and the `numeric_accuracy`/`extraction_recall` fields from that run are zero
+over zero references — ignore them and read `calculations`.
+
+### Sanity-check runs (worked examples)
+
+The tiny files in `data/eval/*_example.json` (2-6 samples each) only confirm the
+harness and agents run end to end:
 
 | Module | Mode | Result |
 |--------|------|--------|
 | `eval_ner` | `--run-agent` (live `dslim/bert-large-NER`) | Precision 0.44, Recall 0.67, F1 0.53 |
-| `eval_sentiment` | `--run-agent` (live `ProsusAI/finbert`) | Accuracy 1.00, Macro-F1 1.00 |
 | `eval_kpi` | `--run-agent` (live regex `KPIAgent`) | Numeric accuracy 0.83, Extraction recall 0.83 |
-| `eval_rag` | offline (hand-scored `retrieved_chunks`/`generated_answer`) | EM 0.50, ROUGE-L 0.50, Hit@5 1.00 |
 
 The live NER run scores 0 on the `STOCK_EXCHANGE` entity type regardless of
 model size (`bert-base` and `bert-large` score identically on this 3-sample
