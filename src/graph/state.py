@@ -21,7 +21,12 @@ class GraphState(TypedDict):
         query: User question or request (used in RAG mode)
         retrieved_chunks: Chunks returned by the retriever
         retrieval_score: Average cosine similarity of retrieved chunks
-        retry_count: Number of times retrieval has been attempted
+        retry_count: Retries performed so far (0 during the first attempt).
+            Read by the routing edge to enforce the retry budget, and reported
+            as "retries_performed".
+        rag_attempts: Total times the retrieve node has run, including the
+            first. Tracked separately from retry_count so the loop terminates
+            even when an attempt returns zero chunks.
         ner_results: Named entity extraction results
         sentiment_results: Sentiment analysis results dictionary
         kpi_results: Key performance indicator extraction results
@@ -35,6 +40,7 @@ class GraphState(TypedDict):
     retrieved_chunks: list[DocumentChunk]
     retrieval_score: float
     retry_count: int
+    rag_attempts: int
     ner_results: list[dict[str, Any]]
     sentiment_results: dict[str, Any]
     kpi_results: dict[str, Any]

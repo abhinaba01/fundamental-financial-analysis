@@ -135,17 +135,15 @@ def test_synthesis_agent_formatting():
     assert "financial_metrics" in report
 
 
-def test_edge_re_query_condition():
-    """Test re-query edge condition logic."""
-    from src.graph.edges import should_retrieve_again
-
-    # Test: should retry (low chunks, low similarity)
-    state: GraphState = {
+def _routing_state(**overrides) -> GraphState:
+    """Minimal state for exercising should_retrieve_again."""
+    state = {
         "document": None,
         "query": "test",
-        "retrieved_chunks": [],  # Empty
-        "retrieval_score": 0.2,  # Below threshold
+        "retrieved_chunks": [],
+        "retrieval_score": 0.0,
         "retry_count": 0,
+        "rag_attempts": 0,
         "ner_results": {},
         "sentiment_results": {},
         "kpi_results": {},
@@ -153,16 +151,69 @@ def test_edge_re_query_condition():
         "final_answer": "",
         "report": {},
     }
+    state.update(overrides)
+    return state
 
-    result = should_retrieve_again(state)
-    assert result == "retrieve"  # Should re-query
 
-    # Test: should not retry (high quality retrieval)
-    state["retrieved_chunks"] = [1, 2, 3, 4, 5]  # Sufficient chunks
-    state["retrieval_score"] = 0.9  # High similarity
+def test_edge_re_query_condition():
+    """Test re-query edge condition logic."""
+    from src.graph.edges import should_retrieve_again
 
-    result = should_retrieve_again(state)
-    assert result == "synthesize"  # Proceed to synthesis
+    # Weak on both axes -> retry.
+    assert should_retrieve_again(_routing_state(retrieved_chunks=[], retrieval_score=0.2)) == "retrieve"
+
+    # Strong on both axes -> proceed.
+    strong = _routing_state(retrieved_chunks=[1, 2, 3, 4, 5], retrieval_score=0.9)
+    assert should_retrieve_again(strong) == "generate"
+
+
+def test_edge_retries_on_weak_similarity_alone():
+    """Regression: plenty of chunks but a weak average must still retry.
+
+    The condition was previously `low_chunks AND low_similarity`, so a
+    retrieval that returned five barely-relevant chunks was treated as good
+    evidence. Each signal is an independent failure mode, so either alone is
+    grounds for re-querying.
+    """
+    from src.graph.edges import SIMILARITY_THRESHOLD, should_retrieve_again
+
+    state = _routing_state(
+        retrieved_chunks=[1, 2, 3, 4, 5],
+        retrieval_score=SIMILARITY_THRESHOLD - 0.05,
+    )
+
+    assert should_retrieve_again(state) == "retrieve"
+
+
+def test_edge_retries_on_few_chunks_alone():
+    """One highly relevant chunk is thin evidence and must still retry."""
+    from src.graph.edges import should_retrieve_again
+
+    assert should_retrieve_again(_routing_state(retrieved_chunks=[1], retrieval_score=0.95)) == "retrieve"
+
+
+def test_routing_threshold_must_exceed_retrieval_floor():
+    """Regression: the routing threshold has to sit above the retrieval floor.
+
+    _retrieve_chunks discards every chunk scoring below
+    RETRIEVAL_SIMILARITY_FLOOR, so the average of the survivors is always at
+    least that floor. When both values were 0.5, `retrieval_score <
+    SIMILARITY_THRESHOLD` was unsatisfiable and the similarity half of the
+    routing condition was dead code that could never fire.
+    """
+    from src.agents.rag_agent import RETRIEVAL_SIMILARITY_FLOOR
+    from src.graph.edges import SIMILARITY_THRESHOLD
+
+    assert SIMILARITY_THRESHOLD > RETRIEVAL_SIMILARITY_FLOOR
+
+
+def test_edge_stops_retrying_at_budget():
+    """The retry budget bounds the loop even while retrieval stays weak."""
+    from src.graph.edges import MAX_RETRIES, should_retrieve_again
+
+    exhausted = _routing_state(retrieved_chunks=[], retrieval_score=0.0, retry_count=MAX_RETRIES)
+
+    assert should_retrieve_again(exhausted) == "generate"
 
 
 def test_config_loading():
@@ -317,6 +368,136 @@ def test_chunker_terminates_on_document_needing_multiple_chunks():
 
     assert not thread.is_alive(), "chunker.chunk() did not terminate within 30s - infinite loop regression"
     assert len(result["chunked"].chunks) > 1
+
+
+def test_parallel_agents_return_delta_not_full_state():
+    """Regression: each parallel branch must return only the key it owns.
+
+    LangGraph merges what concurrent branches return. A branch handing back the
+    whole state would write every key in the same superstep as its siblings,
+    which LangGraph rejects for keys with no reducer. This contract is what
+    makes the fan-out legal, so it is pinned rather than assumed. The branch
+    must also leave the shared input state untouched.
+    """
+    from src.preprocessing.document import ParsedDocument
+
+    doc = ParsedDocument(cleaned_text="Total revenue was $383,285 million.")
+    state = {"document": doc, "query": "q"}
+
+    delta = KPIAgent()(state)
+
+    assert set(delta) == {"kpi_results"}
+    assert "kpi_results" not in state, "branch mutated state shared with its siblings"
+
+
+def test_rag_retrieve_re_searches_on_retry_instead_of_reusing_chunks():
+    """Regression: a retry has to actually re-query.
+
+    Retrieval used to be guarded by `if not retrieved_chunks`, so when the
+    graph looped back the node skipped retrieval entirely and regenerated from
+    the same evidence - the loop could never change its own outcome.
+    """
+    from src.agents.rag_agent import RAGAgent
+
+    searched = []
+
+    class StubEmbedder:
+        def retrieve(self, query, **kwargs):
+            searched.append(query)
+            return []
+
+    agent = RAGAgent(embedding_pipeline=StubEmbedder())
+    original = "What is the revenue?"
+
+    agent.retrieve({
+        "query": original,
+        "document": None,
+        "rag_attempts": 1,
+        "retrieved_chunks": ["chunk from the previous attempt"],
+    })
+
+    assert len(searched) == 1, "retry reused previous chunks instead of re-searching"
+    assert searched[0] != original, "retry re-ran the identical query"
+
+
+def test_rag_reformulation_differs_per_attempt():
+    """Each retry widens the search differently.
+
+    A constant reformulation would make the second and third attempts re-run
+    an identical vector search and retrieve identical chunks.
+    """
+    from src.agents.rag_agent import RAGAgent
+
+    agent = RAGAgent(embedding_pipeline=None)
+    original = "What are the primary risk factors?"
+
+    first = agent._reformulate_query(original, 1)
+    second = agent._reformulate_query(original, 2)
+
+    assert first != second
+    assert original not in (first, second)
+
+
+def test_graph_fans_out_analysis_agents_and_generates_once():
+    """Topology regression for the parallel build.
+
+    Covers three properties at once: all three analysis agents run and their
+    results merge (fan-out then fan-in), the re-query loop is bounded by the
+    retry budget, and generation happens exactly once after the loop settles.
+    That last one is why retrieval and generation are separate nodes - when
+    they were one node, every retry attempt also paid for a gpt-4o call.
+
+    Stub agents keep this a test of the wiring, not of the models.
+    """
+    from src.graph.builder import AnalysisPipelineBuilder
+    from src.graph.edges import MAX_RETRIES
+
+    calls = []
+
+    class StubAgent:
+        def __init__(self, key):
+            self.key = key
+
+        def __call__(self, state):
+            calls.append(self.key)
+            return {self.key: {"ran": True}}
+
+    class StubRag:
+        """Always reports weak retrieval, forcing the full retry budget."""
+
+        def retrieve(self, state):
+            attempts = state.get("rag_attempts", 0)
+            calls.append(f"retrieve{attempts}")
+            return {
+                "rag_attempts": attempts + 1,
+                "retry_count": attempts,
+                "retrieved_chunks": [1],
+                "retrieval_score": 0.55,
+            }
+
+        def generate(self, state):
+            calls.append("generate")
+            return {"cot_reasoning": "reasoning", "final_answer": "answer"}
+
+    graph = AnalysisPipelineBuilder(
+        ner_agent=StubAgent("ner_results"),
+        sentiment_agent=StubAgent("sentiment_results"),
+        kpi_agent=StubAgent("kpi_results"),
+        rag_agent=StubRag(),
+        synthesis_agent=StubAgent("report"),
+    ).build()
+
+    final = graph.invoke(_routing_state())
+
+    # Every branch ran, and every branch's result survived the merge.
+    for key in ("ner_results", "sentiment_results", "kpi_results", "report"):
+        assert final[key] == {"ran": True}, f"{key} missing after fan-in"
+
+    # The loop is bounded, and generation waited for it to finish.
+    assert final["retry_count"] == MAX_RETRIES
+    assert calls.count("generate") == 1, "generation ran per attempt instead of once"
+    last_retrieve = max(i for i, c in enumerate(calls) if c.startswith("retrieve"))
+    assert calls.index("generate") > last_retrieve
 
 
 if __name__ == "__main__":

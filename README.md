@@ -23,20 +23,30 @@ This system extracts, analyzes, and synthesizes insights from financial document
 ```
 Document (PDF/HTML/TXT)
     ↓
-Parser → Cleaner → Chunker → Embedder
-    ↓                          ↓
-ParsedDocument         ChromaDB Vector Store
+Parser → Cleaner → Chunker → Embedder → ChromaDB Vector Store
     ↓
 LangGraph Pipeline:
-    ├─ NER Agent (dslim/bert-large-NER)
-    ├─ Sentiment Agent (ProsusAI/finbert)
-    ├─ KPI Agent (regex-based extraction, not an LLM)
-    ├─ RAG Agent (BAAI/bge-large-en-v1.5 + gpt-4o)
-    │   └─ [Re-query if <3 chunks OR similarity <0.5]
-    └─ Synthesis Agent
-    ↓
-Final Report (JSON)
+
+  START ─┬─→ NER Agent (dslim/bert-large-NER) ────┐
+         ├─→ Sentiment Agent (ProsusAI/finbert) ──┼─→ Retrieve ──┐
+         └─→ KPI Agent (regex, not an LLM) ───────┘   (BGE)  ↑   │
+                                                             │   │
+                        re-query if <3 chunks OR sim <0.6 ───┘   │
+                        (reformulated query, max 2 retries)      ↓
+                                                            Generate
+                                                            (gpt-4o)
+                                                                 ↓
+                                                            Synthesis
+                                                                 ↓
+                                                       Final Report (JSON)
 ```
+
+**Why a graph and not a function chain.** NER, sentiment and KPI extraction
+read the same document and write disjoint state keys, so they run as concurrent
+branches that fan back in at retrieval. Retrieval and generation are separate
+nodes so the re-query loop can iterate on retrieval alone — a retry re-searches
+with a reformulated query, and generation runs once, after the loop settles,
+instead of paying for a `gpt-4o` call on every attempt.
 
 ## Installation
 
@@ -298,17 +308,45 @@ different samples cannot cross-match).
 
 ### Measured Results (this repo)
 
-Test suite: **32/32 passed** (`pytest tests/`), split as:
+Test suite: **40/40 passed** (`pytest tests/`), split as:
 
-- `tests/test_pipeline.py` (20) — 13 smoke tests plus 7 regression tests, each
-  pinning a bug found and fixed during a pipeline audit: KPI regex group
-  misalignment, gross-margin/dollar-amount conflation, smart-quote
-  normalization, financial-notation word-boundary corruption, retrieved-chunk
-  id/type coercion, the `EmbeddingPipeline` constructor signature, and a
-  chunker infinite loop on any document over ~512 tokens.
+- `tests/test_pipeline.py` (28) — 13 smoke tests plus 15 regression and
+  contract tests, each pinning a bug found and fixed during a pipeline audit:
+  KPI regex group misalignment, gross-margin/dollar-amount conflation,
+  smart-quote normalization, financial-notation word-boundary corruption,
+  retrieved-chunk id/type coercion, the `EmbeddingPipeline` constructor
+  signature, a chunker infinite loop on any document over ~512 tokens, and the
+  routing bugs described below — an unreachable similarity threshold, a
+  conjunctive retry condition that suppressed both of its own signals, a retry
+  that reused the previous attempt's chunks, and the delta-return contract that
+  makes the parallel fan-out legal.
 - `tests/test_api.py` (12) — HTTP contract for the FastAPI wrapper: status
   codes, upload handling, argument pass-through, and numpy serialization, with
   `run_analysis` monkeypatched so no models load.
+
+**Parallel fan-out** (`scripts/benchmark_parallel.py`, 12-core CPU,
+`data/samples/medium_filing.txt`, median of 3 runs). The interesting result is
+that the obvious version of this change makes things *worse*:
+
+| Topology | torch intra-op threads | Median wall clock | vs. sequential |
+|----------|------------------------|-------------------|----------------|
+| Sequential | 10 (default) | 50.1s | baseline |
+| Parallel | 10 (default) | 54.7s | **0.92x — slower** |
+| Parallel | 4 (cores ÷ branches) | **44.8s** | **1.13x** |
+| Sequential | 2 | 69.9s | — |
+| Parallel | 2 | 68.0s | 1.03x (both over-restricted) |
+
+Running three models concurrently while each still asks for one thread per core
+oversubscribes a 12-core machine roughly threefold, and the contention costs
+more than the concurrency wins. Capping intra-op threads to cores ÷ branches is
+what makes the fan-out pay; capping further starves each branch and loses more
+than it saves. `run_analysis` applies the cores ÷ branches cap automatically on
+CPU (`_cap_torch_threads_for_fanout` in `src/main.py`) and leaves it alone on
+GPU, where the branches are not competing for those threads.
+
+The re-query loop is also live now rather than structurally unreachable — on
+`small_filing.txt` it fires twice and the reformulated query lifts average
+retrieval similarity from 0.593 to 0.643.
 
 Evaluation CLIs run against the worked examples in `data/eval/` (2-6 samples
 each — sanity checks that the harness and agents work end-to-end, **not** a
@@ -417,13 +455,23 @@ python -m src.main --cpu --document file.pdf --query "..."
 
 ### Re-query Loops
 `configs/*.yaml` are reference documentation only — they are not loaded at
-runtime. The active thresholds are the `SIMILARITY_THRESHOLD` and
-`MIN_CHUNKS_THRESHOLD` constants at the top of `src/graph/edges.py` and
-`src/agents/rag_agent.py` (keep both files in sync if you change them).
+runtime. Two different similarity knobs control this, and they are not
+interchangeable:
 
-The default `SIMILARITY_THRESHOLD` is `0.5`. BAAI/bge-large-en-v1.5 cosine
-similarities for genuinely relevant chunks typically land around 0.5-0.65,
-not near 1.0, so raising this much above ~0.65 will send most queries into
+| Constant | Where | Role |
+|----------|-------|------|
+| `RETRIEVAL_SIMILARITY_FLOOR` (0.5) | `src/agents/rag_agent.py` | Filter — drops individual chunks below this during retrieval |
+| `SIMILARITY_THRESHOLD` (0.6) | `src/graph/edges.py` | Routing — retries if the *average* of surviving chunks is below this |
+
+**The routing threshold must stay strictly above the retrieval floor.**
+Retrieval discards everything below the floor, so the average of what survives
+is always at least the floor — set routing at or below it and the similarity
+check can never fire. Both were 0.5 previously, which is exactly why the
+re-query loop never triggered on similarity. An assertion in `edges.py` now
+enforces the relationship.
+
+BGE cosine similarities for genuinely relevant chunks land around 0.5-0.65, so
+pushing the routing threshold much above ~0.65 sends nearly every query into
 the retry loop regardless of retrieval quality.
 
 ### Slow Embedding

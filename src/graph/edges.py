@@ -1,115 +1,92 @@
 """
 Graph edge functions: Conditional routing logic for LangGraph.
 
-Defines transitions between nodes based on state conditions:
-- Re-query trigger: When <3 chunks AND similarity <0.75, re-query
-- Sequential flow: Parser → Cleaner → Chunker → Embedder → Agents → Synthesis
+Defines the one conditional transition in the pipeline: after a retrieval
+attempt, either loop back and re-query, or move on to generation.
 
-Input: GraphState after each node
-Output: Next node name (str) or END
+Input: GraphState after the retrieve node
+Output: Next node key ("retrieve" or "generate")
 """
 
 from __future__ import annotations
 
+from src.agents.rag_agent import RETRIEVAL_SIMILARITY_FLOOR
 from src.graph.state import GraphState
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Configuration for edge conditions.
-# BAAI/bge-large-en-v1.5 cosine similarities for genuinely relevant chunks
-# typically land around 0.5-0.65, not near 1.0 - a 0.75 threshold is
-# unreachable in practice and forces every query into the retry/failure path.
-SIMILARITY_THRESHOLD = 0.5
+# Routing thresholds. These decide whether a completed retrieval was good
+# enough, which is a different question from RAGAgent's
+# RETRIEVAL_SIMILARITY_FLOOR - that one filters individual chunks *during*
+# retrieval.
+#
+# SIMILARITY_THRESHOLD must stay strictly above that floor. Retrieval discards
+# every chunk scoring below the floor, so the average of the survivors is
+# always >= the floor; a routing threshold at or below it can never fire, and
+# the similarity half of the condition becomes dead code. This is exactly the
+# bug that used to be here (both were 0.5), which is why the re-query loop
+# never triggered on similarity.
+#
+# BGE relevant-chunk similarities cluster in 0.5-0.65, so 0.6 asks for "better
+# than merely admissible" while staying reachable. Above ~0.7 nearly every
+# query would retry regardless of retrieval quality.
+SIMILARITY_THRESHOLD = 0.6
 MIN_CHUNKS_THRESHOLD = 3
 MAX_RETRIES = 2
+
+assert SIMILARITY_THRESHOLD > RETRIEVAL_SIMILARITY_FLOOR, (
+    "Routing threshold must exceed the retrieval floor or it can never fire "
+    f"({SIMILARITY_THRESHOLD} <= {RETRIEVAL_SIMILARITY_FLOOR})"
+)
 
 
 def should_retrieve_again(state: GraphState) -> str:
     """
-    Determine if RAG retrieval should be retried.
+    Decide whether to re-query or proceed to generation.
 
-    Condition: Retry if (<3 chunks) AND (similarity <0.75) AND (retries <max)
+    Retries when the evidence looks weak on *either* axis - too few chunks, or
+    a weak average similarity across them - and the retry budget is not spent.
+    The two signals are independent failure modes: a single highly relevant
+    chunk is thin evidence, and five barely-admissible ones are weak evidence.
+    Requiring both to be bad (which this previously did) meant that in practice
+    neither triggered.
 
     Args:
         state: Current GraphState
 
     Returns:
-        "retrieve" if should re-query, "synthesize" to proceed to synthesis
+        "retrieve" to re-query, "generate" to proceed
     """
     retrieved_chunks = state.get("retrieved_chunks", [])
     retrieval_score = state.get("retrieval_score", 0.0)
     retry_count = state.get("retry_count", 0)
 
-    # Check conditions for re-query
     low_chunk_count = len(retrieved_chunks) < MIN_CHUNKS_THRESHOLD
     low_similarity = retrieval_score < SIMILARITY_THRESHOLD
     within_max_retries = retry_count < MAX_RETRIES
 
-    should_retry = low_chunk_count and low_similarity and within_max_retries
+    should_retry = (low_chunk_count or low_similarity) and within_max_retries
 
     if should_retry:
-        logger.info(
-            f"Re-query triggered: chunks={len(retrieved_chunks)}, "
-            f"similarity={retrieval_score:.3f}, retries={retry_count}"
-        )
+        reasons = []
+        if low_chunk_count:
+            reasons.append(f"only {len(retrieved_chunks)} chunks")
+        if low_similarity:
+            reasons.append(f"avg similarity {retrieval_score:.3f} < {SIMILARITY_THRESHOLD}")
+        logger.info(f"Re-query triggered ({'; '.join(reasons)}), retries so far: {retry_count}")
         return "retrieve"
 
-    logger.info("Retrieval sufficient. Proceeding to synthesis.")
-    return "synthesize"
-
-
-def determine_next_agent(state: GraphState) -> str:
-    """
-    Determine next agent in pipeline.
-
-    Sequential flow: NER → Sentiment → KPI → RAG → Synthesis
-
-    Args:
-        state: Current GraphState
-
-    Returns:
-        Next agent node name
-    """
-    ner_done = state.get("ner_results")
-    sentiment_done = state.get("sentiment_results")
-    kpi_done = state.get("kpi_results")
-    rag_done = state.get("final_answer")
-
-    current_phase = (
-        bool(ner_done),
-        bool(sentiment_done),
-        bool(kpi_done),
-        bool(rag_done),
-    )
-
-    # Define transition sequence
-    if not ner_done:
-        logger.debug("Next: NER agent")
-        return "ner"
-    elif not sentiment_done:
-        logger.debug("Next: Sentiment agent")
-        return "sentiment"
-    elif not kpi_done:
-        logger.debug("Next: KPI agent")
-        return "kpi"
-    elif not rag_done:
-        logger.debug("Next: RAG agent")
-        return "rag"
+    if low_chunk_count or low_similarity:
+        logger.info(
+            f"Retrieval still weak after {retry_count} retries "
+            f"({len(retrieved_chunks)} chunks, avg similarity {retrieval_score:.3f}). "
+            "Retry budget exhausted; generating from what was found."
+        )
     else:
-        logger.debug("Next: Synthesis")
-        return "synthesis"
+        logger.info(
+            f"Retrieval sufficient ({len(retrieved_chunks)} chunks, "
+            f"avg similarity {retrieval_score:.3f}). Proceeding to generation."
+        )
 
-
-def route_after_synthesis(state: GraphState) -> str:
-    """
-    Route after synthesis to END.
-
-    Args:
-        state: Final GraphState
-
-    Returns:
-        END to complete graph traversal
-    """
-    logger.info("Analysis pipeline complete. Exiting.")
-    return "__end__"
+    return "generate"

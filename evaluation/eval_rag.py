@@ -346,6 +346,7 @@ def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
             "retrieved_chunks": [],
             "retrieval_score": 0.0,
             "retry_count": 0,
+            "rag_attempts": 0,
             "ner_results": {},
             "sentiment_results": {},
             "kpi_results": {},

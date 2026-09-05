@@ -1,35 +1,38 @@
 """
 Graph Builder: LangGraph StateGraph assembly.
 
-Orchestrates the complete analysis pipeline:
-1. Input: ParsedDocument + query
-2. Sequential agents: NER → Sentiment → KPI → RAG
-3. Conditional: Re-query if retrieval low confidence
-4. Output: Final report with all agent results
+Topology:
 
-Architecture:
-- NER Agent: Entity extraction
-- Sentiment Agent: Sentiment analysis with tone
-- KPI Agent: Financial metric extraction
-- RAG Agent: Evidence-based synthesis with re-query capability
-- Synthesis Agent: Report assembly
+    START ─┬─→ ner ───────┐
+           ├─→ sentiment ─┼─→ retrieve ──(conditional)──┐
+           └─→ kpi ───────┘      ↑                      │
+                                 └──── re-query ────────┤
+                                                        ↓
+                                        generate → synthesis → END
 
-Edges:
-- Sequential: Each agent → next agent
-- Conditional: RAG → {retrieve or synthesize} based on confidence
-- Terminal: Synthesis → END
+Two things are worth noting about this shape.
+
+**The three analysis agents fan out.** NER, sentiment and KPI extraction read
+the same document and write disjoint state keys, so nothing forces them into a
+sequence. They are independent branches that fan back in at `retrieve`, which
+LangGraph runs only once all three have finished. Each returns a state delta
+rather than the whole state - concurrent branches all returning full state
+would mean several writes to every key in one superstep, which LangGraph
+rejects without a reducer.
+
+**Retrieval and generation are separate nodes.** The re-query loop wraps
+retrieval alone, so a low-confidence retry re-searches with a reformulated
+query and generation runs once, after the loop settles - rather than paying
+for a gpt-4o call on every attempt. Retry policy lives in edges.py; the RAG
+agent only counts attempts.
 """
 
 from __future__ import annotations
 
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, START, StateGraph
 
 from src.graph.state import GraphState
-from src.graph.edges import (
-    should_retrieve_again,
-    determine_next_agent,
-    route_after_synthesis,
-)
+from src.graph.edges import should_retrieve_again
 from src.agents.ner_agent import NERAgent
 from src.agents.sentiment_agent import SentimentAgent
 from src.agents.kpi_agent import KPIAgent
@@ -38,6 +41,9 @@ from src.agents.synthesis_agent import SynthesisAgent
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Nodes that run concurrently as independent branches off START.
+PARALLEL_ANALYSIS_NODES = ("ner", "sentiment", "kpi")
 
 
 class AnalysisPipelineBuilder:
@@ -83,90 +89,44 @@ class AnalysisPipelineBuilder:
         Build the complete analysis pipeline StateGraph.
 
         Returns:
-            Compiled StateGraph ready for execution
+            Compiled StateGraph ready for .invoke() or .stream()
         """
         self.logger.info("Building analysis pipeline graph...")
 
-        # Create state graph
         graph = StateGraph(GraphState)
 
-        # Add all nodes
         graph.add_node("ner", self.ner_agent)
         graph.add_node("sentiment", self.sentiment_agent)
         graph.add_node("kpi", self.kpi_agent)
-        graph.add_node("rag", self.rag_agent)
+        graph.add_node("retrieve", self.rag_agent.retrieve)
+        graph.add_node("generate", self.rag_agent.generate)
         graph.add_node("synthesis", self.synthesis_agent)
 
-        # Set entry point
-        graph.set_entry_point("ner")
+        # Fan out: the three analysis agents are independent, so they start
+        # together rather than in an arbitrary sequence.
+        for node in PARALLEL_ANALYSIS_NODES:
+            graph.add_edge(START, node)
 
-        # Add sequential edges (normal progression)
-        graph.add_edge("ner", "sentiment")
-        graph.add_edge("sentiment", "kpi")
-        graph.add_edge("kpi", "rag")
+        # Fan in: retrieve waits for all three branches to finish.
+        for node in PARALLEL_ANALYSIS_NODES:
+            graph.add_edge(node, "retrieve")
 
-        # Add conditional edge from RAG
-        # Re-query trigger: <3 chunks AND similarity <0.75
+        # Re-query loop around retrieval only.
         graph.add_conditional_edges(
-            "rag",
+            "retrieve",
             should_retrieve_again,
             {
-                "retrieve": "rag",  # Loop back to RAG for re-query
-                "synthesize": "synthesis",  # Proceed to synthesis
+                "retrieve": "retrieve",
+                "generate": "generate",
             },
         )
 
-        # Add edge from synthesis to END
+        graph.add_edge("generate", "synthesis")
         graph.add_edge("synthesis", END)
 
-        # Compile graph
         compiled_graph = graph.compile()
 
         self.logger.info("Pipeline graph compiled successfully")
-
-        return compiled_graph
-
-    def build_parallel_agents_variant(self) -> StateGraph:
-        """
-        Build variant with parallel agent execution.
-
-        Agents NER, Sentiment, KPI, run in parallel after retrieval,
-        then synthesis combines results.
-
-        Returns:
-            Compiled StateGraph with parallel agents
-        """
-        self.logger.info("Building parallel agents variant...")
-
-        graph = StateGraph(GraphState)
-
-        # Add all nodes
-        graph.add_node("ner", self.ner_agent)
-        graph.add_node("sentiment", self.sentiment_agent)
-        graph.add_node("kpi", self.kpi_agent)
-        graph.add_node("rag", self.rag_agent)
-        graph.add_node("synthesis", self.synthesis_agent)
-
-        graph.set_entry_point("rag")
-
-        # RAG runs first (retrieval)
-        graph.add_conditional_edges(
-            "rag",
-            should_retrieve_again,
-            {
-                "retrieve": "rag",  # Re-query loop
-                "synthesize": "synthesis",  # But should actually go to parallel agents
-            },
-        )
-
-        # In this variant, after RAG → all agents run in parallel
-        # LangGraph handles this via send() mechanism
-
-        graph.add_edge("synthesis", END)
-
-        compiled_graph = graph.compile()
-
-        self.logger.info("Parallel variant compiled successfully")
 
         return compiled_graph
 

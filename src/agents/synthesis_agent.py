@@ -31,7 +31,7 @@ class SynthesisAgent:
         """Initialize synthesis agent."""
         self.logger = logger
 
-    def __call__(self, state: GraphState) -> GraphState:
+    def __call__(self, state: GraphState) -> dict[str, Any]:
         """
         Synthesize all agent outputs into final report.
 
@@ -39,16 +39,15 @@ class SynthesisAgent:
             state: GraphState with all agent results
 
         Returns:
-            Updated GraphState with report dict populated
+            State delta containing the report
         """
         self.logger.info("Synthesizing analysis results into final report...")
 
         report = self._build_report(state)
-        state["report"] = report
 
         self.logger.info("Report synthesis complete")
 
-        return state
+        return {"report": report}
 
     def _build_report(self, state: GraphState) -> dict[str, Any]:
         """

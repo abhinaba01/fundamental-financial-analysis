@@ -46,21 +46,24 @@ class KPIAgent:
         """Initialize the KPI agent."""
         self.logger = logger
 
-    def __call__(self, state: GraphState) -> GraphState:
+    def __call__(self, state: GraphState) -> dict[str, Any]:
         """
         Extract KPIs from the document in the state.
+
+        Runs as a parallel branch, so it returns only the key it owns and
+        treats `state` as read-only - see NERAgent.__call__ for why.
 
         Args:
             state: GraphState with document populated
 
         Returns:
-            Updated GraphState with kpi_results populated
+            State delta containing kpi_results
         """
         document = state.get("document")
 
         if not document:
             self.logger.warning("No document in state. Skipping KPI extraction.")
-            return state
+            return {}
 
         self.logger.info(f"Extracting KPIs from document: {document.doc_id}")
 
@@ -76,14 +79,12 @@ class KPIAgent:
             "total_kpis": len(extracted_kpis) + len(calculated_kpis),
         }
 
-        state["kpi_results"] = kpi_results
-
         self.logger.info(
             f"KPI extraction complete: {len(extracted_kpis)} extracted, "
             f"{len(calculated_kpis)} calculated"
         )
 
-        return state
+        return {"kpi_results": kpi_results}
 
     def _extract_kpi_patterns(self, text: str) -> dict[str, list[dict[str, Any]]]:
         """

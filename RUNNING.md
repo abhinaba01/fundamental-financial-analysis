@@ -92,9 +92,11 @@ python -m src.main --document data/samples/small_filing.txt --query "What is the
    gets cached in `~/.cache/huggingface/hub/`. Budget 3-5 minutes the very
    first time; seconds on every run after
 5. **Run the analysis graph**: NER (`dslim/bert-large-NER`), sentiment
-   (`ProsusAI/finbert`), KPI extraction (regex-based, no model), then RAG
-   (retrieval + generation). NER and sentiment models are smaller and
-   download in under a minute the first time
+   (`ProsusAI/finbert`) and KPI extraction (regex-based, no model) run
+   concurrently as parallel branches, then fan in to retrieval, an optional
+   re-query loop, and `gpt-4o` generation. NER and sentiment models are
+   smaller than the embedding model and download in under a minute the
+   first time
 6. **Synthesize** everything into a JSON report
 
 A cold run (nothing cached yet) takes on the order of 5-8 minutes, almost
@@ -142,7 +144,7 @@ The response is the same JSON structure as the CLI's `report.json`.
 pytest tests/ -v
 ```
 
-Should show `32 passed` — 20 pipeline tests plus 12 for the HTTP API. The
+Should show `40 passed` — 28 pipeline tests plus 12 for the HTTP API. The
 first run loads the NER and sentiment models (same one-time download cost as
 step 5), so it isn't instant, but it doesn't touch the embedding model or
 ChromaDB. The API tests monkeypatch the pipeline, so they load no models

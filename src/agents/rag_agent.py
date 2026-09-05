@@ -8,9 +8,17 @@ Uses:
 
 Performs:
 - Query-based document chunk retrieval
-- Re-querying if retrieval confidence is low
 - Chain-of-thought synthesis of answers
 - Evidence citation
+
+Retrieval and generation are exposed as two separate graph nodes. The re-query
+loop runs around retrieval alone, so a low-confidence retry re-searches with a
+reformulated query and only pays for one generation call once the loop settles,
+instead of regenerating an answer on every attempt. `__call__` runs both in
+sequence for standalone use (e.g. evaluation/eval_rag.py).
+
+Retry *policy* lives in src/graph/edges.py. This module counts attempts but
+does not decide when to stop.
 
 Input: GraphState with document, query, chunks, embeddings available
 Output: GraphState with retrieved_chunks, cot_reasoning, final_answer populated
@@ -19,6 +27,7 @@ Output: GraphState with retrieved_chunks, cot_reasoning, final_answer populated
 from __future__ import annotations
 
 import os
+from typing import Any
 
 try:
     from openai import OpenAI
@@ -31,14 +40,27 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 # Configuration.
+# RETRIEVAL_SIMILARITY_FLOOR is a *filter*: chunks scoring below it are dropped
+# at retrieval time. It is deliberately not the same knob as edges.py's
+# SIMILARITY_THRESHOLD, which is a *routing* decision about the surviving
+# chunks' average. Because this floor discards everything below 0.5, the
+# average of what comes back is always >= 0.5 - so a routing threshold set to
+# 0.5 or lower can never fire. edges.py must stay strictly above this value;
+# see the comment there.
+#
 # BAAI/bge-large-en-v1.5 cosine similarities for genuinely relevant chunks
-# typically land around 0.5-0.65, not near 1.0 - keep this in sync with
-# src/graph/edges.py's SIMILARITY_THRESHOLD.
+# typically land around 0.5-0.65, not near 1.0.
 RETRIEVAL_TOP_K = 5
-SIMILARITY_THRESHOLD = 0.5
-MIN_CHUNKS_THRESHOLD = 3
-MAX_RETRIES = 2
+RETRIEVAL_SIMILARITY_FLOOR = 0.5
 GENERATION_MODEL = "gpt-4o"
+
+# Dropped when a retry strips a question down to content words, so that the
+# search text reads like filing prose rather than like a question.
+_QUESTION_STOPWORDS = frozenset({
+    "what", "which", "who", "whom", "whose", "when", "where", "why", "how",
+    "is", "are", "was", "were", "be", "been", "being", "do", "does", "did",
+    "the", "a", "an", "of", "for", "in", "on", "to", "and", "or",
+})
 GENERATION_TEMPERATURE = 0.7
 GENERATION_MAX_TOKENS = 1024
 
@@ -86,60 +108,107 @@ class RAGAgent:
 
         self.logger.info("RAG agent initialized successfully")
 
-    def __call__(self, state: GraphState) -> GraphState:
+    def __call__(self, state: GraphState) -> dict[str, Any]:
         """
-        Execute RAG on the query using document chunks.
+        Run retrieval then generation in one pass.
+
+        This is the standalone entry point (evaluation/eval_rag.py uses it).
+        The graph wires `retrieve` and `generate` as separate nodes instead, so
+        that the re-query loop can iterate on retrieval without regenerating an
+        answer each time around.
 
         Args:
             state: GraphState with document, query, and retrieved_chunks
 
         Returns:
-            Updated GraphState with cot_reasoning and final_answer populated
+            State delta from both stages
+        """
+        delta = self.retrieve(state)
+        delta.update(self.generate({**state, **delta}))
+        return delta
+
+    def retrieve(self, state: GraphState) -> dict[str, Any]:
+        """
+        Retrieve chunks for the query. Graph node - may run more than once.
+
+        Retrieval runs on every entry, not just the first. The graph loops back
+        here when routing judges confidence too low, and an attempt that reused
+        the previous attempt's chunks would search for nothing new - the retry
+        would be a no-op. Each attempt therefore reformulates the query.
+
+        This node counts attempts but does not decide when to stop; that bound
+        is enforced by should_retrieve_again in src/graph/edges.py. A previous
+        version also retried internally here, giving two independent retry
+        mechanisms with different trigger conditions.
+
+        Args:
+            state: GraphState with query and document
+
+        Returns:
+            State delta with retrieved_chunks, retrieval_score, attempt counters
         """
         query = state.get("query")
         document = state.get("document")
+        attempts = state.get("rag_attempts", 0)
         retrieved_chunks = state.get("retrieved_chunks", [])
 
         if not query:
-            self.logger.warning("No query in state. Skipping RAG.")
-            return state
+            self.logger.warning("No query in state. Skipping retrieval.")
+            return {}
 
-        self.logger.info(f"Running RAG for query: {query[:100]}...")
+        delta: dict[str, Any] = {
+            "rag_attempts": attempts + 1,
+            # Retries performed *before* this attempt - i.e. what the report
+            # means by "retries_performed". First pass is not a retry.
+            "retry_count": attempts,
+        }
 
-        # Retrieve chunks if not already provided
-        if not retrieved_chunks and self.embedding_pipeline:
-            retrieved_chunks, retrieval_score = self._retrieve_chunks(
-                query, document
-            )
-            state["retrieved_chunks"] = retrieved_chunks
-            state["retrieval_score"] = retrieval_score
-
-            # Re-query if needed
-            if len(retrieved_chunks) < MIN_CHUNKS_THRESHOLD:
-                self.logger.info(
-                    f"Low retrieval confidence ({len(retrieved_chunks)} chunks). Re-querying..."
-                )
-                retry_query = self._generate_retry_query(query)
-                retrieved_chunks, retrieval_score = self._retrieve_chunks(
-                    retry_query, document
-                )
-                state["retrieved_chunks"] = retrieved_chunks
-                state["retrieval_score"] = retrieval_score
-                state["retry_count"] = state.get("retry_count", 0) + 1
-
-        # Generate answer with chain-of-thought
-        if retrieved_chunks:
-            cot_reasoning, final_answer = self._generate_answer(query, retrieved_chunks)
-            state["cot_reasoning"] = cot_reasoning
-            state["final_answer"] = final_answer
+        if attempts == 0:
+            search_query = query
+            self.logger.info(f"Running RAG for query: {query[:100]}...")
         else:
+            search_query = self._reformulate_query(query, attempts)
+            self.logger.info(f"Re-query attempt {attempts}: {search_query[:100]}...")
+
+        # First pass honors chunks a caller supplied directly; a retry always
+        # re-retrieves, or looping back here would change nothing.
+        if self.embedding_pipeline is not None and (attempts > 0 or not retrieved_chunks):
+            chunks, retrieval_score = self._retrieve_chunks(search_query, document)
+            delta["retrieved_chunks"] = chunks
+            delta["retrieval_score"] = retrieval_score
+
+        return delta
+
+    def generate(self, state: GraphState) -> dict[str, Any]:
+        """
+        Generate the chain-of-thought answer. Graph node - runs once, after
+        the re-query loop has settled on a set of chunks.
+
+        Args:
+            state: GraphState with query and retrieved_chunks
+
+        Returns:
+            State delta with cot_reasoning and final_answer
+        """
+        query = state.get("query")
+        retrieved_chunks = state.get("retrieved_chunks", [])
+
+        if not query:
+            self.logger.warning("No query in state. Skipping generation.")
+            return {}
+
+        if not retrieved_chunks:
             self.logger.warning("No chunks retrieved. Unable to generate answer.")
-            state["cot_reasoning"] = "No relevant chunks found in document."
-            state["final_answer"] = "Unable to answer based on available documents."
+            return {
+                "cot_reasoning": "No relevant chunks found in document.",
+                "final_answer": "Unable to answer based on available documents.",
+            }
+
+        cot_reasoning, final_answer = self._generate_answer(query, retrieved_chunks)
 
         self.logger.info("RAG synthesis complete")
 
-        return state
+        return {"cot_reasoning": cot_reasoning, "final_answer": final_answer}
 
     def _retrieve_chunks(
         self, query: str, document
@@ -163,7 +232,7 @@ class RAGAgent:
                 query,
                 top_k=RETRIEVAL_TOP_K,
                 filter_ticker=document.ticker if document else None,
-                similarity_threshold=SIMILARITY_THRESHOLD,
+                similarity_threshold=RETRIEVAL_SIMILARITY_FLOOR,
             )
 
             if chunks:
@@ -184,17 +253,36 @@ class RAGAgent:
             self.logger.error(f"Error during retrieval: {e}")
             return [], 0.0
 
-    def _generate_retry_query(self, original_query: str) -> str:
+    def _reformulate_query(self, original_query: str, attempt: int) -> str:
         """
-        Generate a reformulated query for re-retrieval.
+        Reformulate the query for a re-retrieval attempt.
+
+        Each attempt widens the search differently. Returning the same string
+        every time would make the second and third attempts re-run an identical
+        vector search and retrieve identical chunks, so the reformulation is
+        indexed by attempt number.
 
         Args:
-            original_query: Original query text
+            original_query: The user's original query, unchanged across attempts
+            attempt: 1-based retry number (attempt 0 uses the original query)
 
         Returns:
             Reformulated query
         """
-        return f"Provide detailed information about: {original_query}"
+        strategies = [
+            # 1st retry: ask for elaboration, which pulls in surrounding context.
+            f"Provide detailed information about: {original_query}",
+            # 2nd retry: drop question framing down to content words, which
+            # embeds closer to declarative filing prose than a question does.
+            " ".join(
+                word
+                for word in original_query.replace("?", "").split()
+                if word.lower() not in _QUESTION_STOPWORDS
+            )
+            or original_query,
+        ]
+
+        return strategies[min(attempt, len(strategies)) - 1]
 
     def _generate_answer(
         self, query: str, chunks

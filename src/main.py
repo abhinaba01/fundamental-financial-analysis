@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import torch
@@ -22,12 +23,38 @@ from src.preprocessing.parser import DocumentParser
 from src.preprocessing.cleaner import DocumentCleaner
 from src.preprocessing.chunker import SemanticChunker
 from src.preprocessing.embedder import EmbeddingPipeline
-from src.graph.builder import create_default_pipeline
+from src.graph.builder import PARALLEL_ANALYSIS_NODES, create_default_pipeline
 from src.utils.logger import get_logger
 
 load_dotenv()
 
 logger = get_logger(__name__)
+
+
+def _cap_torch_threads_for_fanout() -> None:
+    """
+    Stop the parallel analysis branches from oversubscribing the CPU.
+
+    torch defaults to roughly one intra-op thread per core *per model*, so
+    three concurrent branches ask for about three times the cores available and
+    spend the difference on context switching. Measured on a 12-core machine
+    (scripts/benchmark_parallel.py, medium_filing.txt): fan-out at the default
+    thread count ran ~9% *slower* than running the agents in sequence, while
+    capping intra-op threads to cores/branches turned the same topology into a
+    ~1.13x speedup.
+
+    Only applies on CPU. On GPU the models are not competing for these threads,
+    and lowering the cap would only slow the CPU-side tokenization.
+    """
+    cores = os.cpu_count() or 1
+    per_branch = max(1, cores // len(PARALLEL_ANALYSIS_NODES))
+
+    if per_branch < torch.get_num_threads():
+        logger.info(
+            f"Capping torch intra-op threads at {per_branch} "
+            f"({cores} cores / {len(PARALLEL_ANALYSIS_NODES)} parallel branches)"
+        )
+        torch.set_num_threads(per_branch)
 
 
 def run_analysis(
@@ -57,6 +84,9 @@ def run_analysis(
         use_gpu = torch.cuda.is_available()
     device = "cuda" if use_gpu else "cpu"
     logger.info(f"Using device: {device}")
+
+    if device == "cpu":
+        _cap_torch_threads_for_fanout()
 
     logger.info(f"Starting analysis pipeline for: {document_path}")
 
@@ -95,6 +125,7 @@ def run_analysis(
         "retrieved_chunks": [],
         "retrieval_score": 0.0,
         "retry_count": 0,
+        "rag_attempts": 0,
         "ner_results": {},
         "sentiment_results": {},
         "kpi_results": {},
