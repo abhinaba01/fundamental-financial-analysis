@@ -84,11 +84,27 @@ def _initial_state(document) -> dict:
     }
 
 
-def _time_runs(graph, state: dict, runs: int) -> list[float]:
+def _time_runs(graph, state: dict, runs: int, device: str) -> list[float]:
+    """
+    Time repeated graph invocations.
+
+    CUDA kernel launches are asynchronous, so on GPU the wall clock has to be
+    fenced with synchronize() at both ends. Without it the timer measures how
+    fast Python queued the work, not how long the GPU took - which typically
+    reports an impossibly large speedup.
+    """
+    import torch
+
+    synchronize = device == "cuda" and torch.cuda.is_available()
+
     timings = []
     for _ in range(runs):
+        if synchronize:
+            torch.cuda.synchronize()
         start = time.perf_counter()
         graph.invoke(state)
+        if synchronize:
+            torch.cuda.synchronize()
         timings.append(time.perf_counter() - start)
     return timings
 
@@ -103,14 +119,33 @@ def main() -> int:
         default=None,
         help=(
             "Cap torch intra-op threads. Default lets torch take ~all cores per "
-            "model, which oversubscribes badly when three branches run at once."
+            "model, which oversubscribes badly when three branches run at once. "
+            "CPU only - irrelevant when the models are on the GPU."
+        ),
+    )
+    parser.add_argument(
+        "--gpu",
+        action="store_true",
+        help=(
+            "Run NER and sentiment on CUDA. The fan-out question is different "
+            "here: the branches share one device rather than competing for CPU "
+            "threads, so whether concurrency helps is an open measurement."
         ),
     )
     args = parser.parse_args()
 
-    if args.torch_threads:
-        import torch
+    import torch
 
+    if args.gpu and not torch.cuda.is_available():
+        print("--gpu given but torch.cuda.is_available() is False.")
+        return 1
+
+    device = "cuda" if args.gpu else "cpu"
+    print(f"device: {device}")
+    if device == "cuda":
+        print(f"  {torch.cuda.get_device_name(0)}")
+
+    if args.torch_threads:
         torch.set_num_threads(args.torch_threads)
         print(f"torch intra-op threads capped at {args.torch_threads}")
 
@@ -124,8 +159,12 @@ def main() -> int:
     doc = SemanticChunker().chunk(DocumentCleaner().clean(DocumentParser().parse(document_path)))
     print(f"  {len(doc.chunks)} chunks, {len(doc.cleaned_text)} chars")
 
-    print("Loading models (once, shared by both topologies)...")
-    agents = {"ner": NERAgent(), "sentiment": SentimentAgent(), "kpi": KPIAgent()}
+    print(f"Loading models on {device} (once, shared by both topologies)...")
+    agents = {
+        "ner": NERAgent(device=device),
+        "sentiment": SentimentAgent(device=device),
+        "kpi": KPIAgent(),  # regex, no device
+    }
 
     state = _initial_state(doc)
     graphs = {"sequential": _build(agents, parallel=False), "parallel": _build(agents, parallel=True)}
@@ -138,19 +177,26 @@ def main() -> int:
     results = {}
     for name, graph in graphs.items():
         print(f"Timing {name} ({args.runs} runs)...")
-        timings = _time_runs(graph, state, args.runs)
+        timings = _time_runs(graph, state, args.runs, device)
         results[name] = statistics.median(timings)
         print(f"  runs: {', '.join(f'{t:.2f}s' for t in timings)}")
 
     seq, par = results["sequential"], results["parallel"]
+    threads = args.torch_threads or ("n/a" if device == "cuda" else torch.get_num_threads())
     print("\n" + "=" * 60)
+    print(f"device: {device}   torch intra-op threads: {threads}")
     print(f"sequential (median): {seq:.2f}s")
     print(f"parallel   (median): {par:.2f}s")
     if par < seq:
         print(f"speedup: {seq / par:.2f}x  ({seq - par:.2f}s saved)")
     else:
         print(f"NO SPEEDUP: parallel is {par / seq:.2f}x the sequential time")
-        print("Expected on a CPU where torch already saturates cores per model.")
+        if device == "cpu":
+            print("Expected when torch takes ~all cores per model: three branches")
+            print("oversubscribe the CPU. Retry with --torch-threads <cores/3>.")
+        else:
+            print("The branches share one device, so concurrency has less to win")
+            print("than on CPU - the GPU serializes much of the work regardless.")
     print("=" * 60)
     return 0
 

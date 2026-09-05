@@ -356,8 +356,17 @@ oversubscribes a 12-core machine roughly threefold, and the contention costs
 more than the concurrency wins. Capping intra-op threads to cores ÷ branches is
 what makes the fan-out pay; capping further starves each branch and loses more
 than it saves. `run_analysis` applies the cores ÷ branches cap automatically on
-CPU (`_cap_torch_threads_for_fanout` in `src/main.py`) and leaves it alone on
-GPU, where the branches are not competing for those threads.
+CPU (`_cap_torch_threads_for_fanout` in `src/main.py`) and skips it on GPU,
+where the branches are not competing for intra-op threads.
+
+**These are CPU numbers, and the GPU case is not yet measured.** On a GPU the
+branches share one device instead of contending for CPU threads, and the device
+serializes much of the work regardless — so fan-out may win less there, or
+nothing. [`Benchmark_On_Colab.ipynb`](Benchmark_On_Colab.ipynb) runs the same
+sweep on a Colab GPU (with `torch.cuda.synchronize()` fencing, without which
+async kernel launches make the timings meaningless) plus a CPU baseline on the
+same VM, since comparing a T4 against a 12-core laptop would confound hardware
+with topology.
 
 The re-query loop is also live now rather than structurally unreachable — on
 `small_filing.txt` it fires twice and the reformulated query lifts average
@@ -578,7 +587,11 @@ After that, embedding batch size is the `BATCH_SIZE` constant in
 │   ├── agents.yaml            # Reference only - not loaded at runtime
 │   └── pipeline.yaml          # Reference only - not loaded at runtime
 ├── scripts/
-│   └── download_models.py     # Pre-download model weights
+│   ├── download_models.py           # Pre-download model weights
+│   ├── prepare_eval_datasets.py     # Fetch/convert the real benchmarks
+│   ├── index_eval_corpus.py         # Index a benchmark corpus for eval_rag
+│   ├── analyze_finqa_calculations.py # FinQA failure breakdown
+│   └── benchmark_parallel.py        # Fan-out timing sweep (--gpu supported)
 ├── tests/
 │   ├── test_pipeline.py       # Preprocessing + agent unit/regression tests
 │   └── test_api.py            # FastAPI endpoint contract tests
