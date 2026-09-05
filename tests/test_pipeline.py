@@ -25,6 +25,7 @@ from src.graph.state import GraphState
 from src.agents.ner_agent import NERAgent
 from src.agents.sentiment_agent import SentimentAgent
 from src.agents.kpi_agent import KPIAgent
+from src.agents.financial_ner_agent import FinancialNERAgent
 from src.agents.rag_agent import RAGAgent
 from src.agents.synthesis_agent import SynthesisAgent
 
@@ -88,6 +89,7 @@ def test_graph_state_structure():
         "ner_results": {},
         "sentiment_results": {},
         "kpi_results": {},
+        "financial_entities": [],
         "cot_reasoning": "",
         "final_answer": "",
         "report": {},
@@ -117,6 +119,7 @@ def test_synthesis_agent_formatting():
         "ner_results": {"total_entities": 5, "entity_types": {"ORG": 3}},
         "sentiment_results": {"overall_sentiment": "positive", "overall_score": 0.8},
         "kpi_results": {"total_kpis": 3, "extracted_kpis": {"revenue": 1000}},
+        "financial_entities": [],
         "cot_reasoning": "Step 1: Analyze data...",
         "final_answer": "The revenue is 1000",
         "report": {},
@@ -149,6 +152,7 @@ def test_edge_re_query_condition():
         "ner_results": {},
         "sentiment_results": {},
         "kpi_results": {},
+        "financial_entities": [],
         "cot_reasoning": "",
         "final_answer": "",
         "report": {},
@@ -317,6 +321,68 @@ def test_chunker_terminates_on_document_needing_multiple_chunks():
 
     assert not thread.is_alive(), "chunker.chunk() did not terminate within 30s - infinite loop regression"
     assert len(result["chunked"].chunks) > 1
+
+
+def test_financial_ner_agent_degrades_gracefully_without_trained_model():
+    """Until Train_FinBERT_NER_Colab.ipynb has been run and its output model
+    pushed to the Hub, FinancialNERAgent has nothing to load - it must not
+    raise, and must produce an empty (not missing) financial_entities list,
+    the same graceful-degradation shape used elsewhere in this pipeline
+    (e.g. SentimentAgent's tone-model fallback)."""
+    from src.preprocessing.document import ParsedDocument, DocumentChunk
+
+    agent = FinancialNERAgent(model_name="nonexistent-org/nonexistent-model-xyz")
+    assert agent.pipeline is None
+
+    doc = ParsedDocument(chunks=[DocumentChunk(text="Revenue was $416,161 million.")])
+    state = {"document": doc}
+
+    result = agent(state)
+
+    assert result["financial_entities"] == []
+
+
+def test_kpi_agent_prefers_financial_entities_revenue_over_regex():
+    """Regression: KPIAgent must prefer the fine-tuned financial-entity
+    model's revenue figure over a regex match on the same document, once a
+    trained model is available - otherwise wiring it in accomplishes
+    nothing."""
+    agent = KPIAgent()
+
+    extracted_kpis = {
+        "revenue": [{"name": "revenue", "value": 100.0, "unit": "", "raw_text": "x", "source": "regex"}]
+    }
+    financial_entities = [
+        {"text": "416,161", "tag": "Revenues", "value": 416161.0, "score": 0.95}
+    ]
+
+    agent._apply_financial_entities(extracted_kpis, financial_entities)
+
+    assert extracted_kpis["revenue"][0]["value"] == 416161.0
+    assert extracted_kpis["revenue"][0]["source"] == "financial_ner_model"
+
+
+def test_kpi_agent_regex_only_categories_ignore_financial_entities():
+    """Regression: FiNER-139 has no tag for gross_margin, operating_income,
+    net_income, eps, ebitda, roa, or roe - only "revenue" has real ground
+    truth (see REVENUE_XBRL_TAGS). A financial_entities list containing only
+    non-revenue tags must not populate or alter any other KPI type, and must
+    not fabricate a "revenue" entry that was never actually extracted."""
+    agent = KPIAgent()
+
+    extracted_kpis = {
+        "operating_income": [
+            {"name": "operating income", "value": 50.0, "unit": "", "raw_text": "x", "source": "regex"}
+        ]
+    }
+    financial_entities = [
+        {"text": "8,664", "tag": "OperatingLeaseLiability", "value": 8664.0, "score": 0.9}
+    ]
+
+    agent._apply_financial_entities(extracted_kpis, financial_entities)
+
+    assert extracted_kpis["operating_income"][0]["value"] == 50.0
+    assert "revenue" not in extracted_kpis
 
 
 if __name__ == "__main__":

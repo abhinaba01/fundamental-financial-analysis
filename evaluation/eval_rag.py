@@ -349,6 +349,7 @@ def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
             "ner_results": {},
             "sentiment_results": {},
             "kpi_results": {},
+            "financial_entities": [],
             "cot_reasoning": "",
             "final_answer": "",
             "report": {},

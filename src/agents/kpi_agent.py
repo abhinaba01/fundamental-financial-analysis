@@ -1,16 +1,15 @@
 """
 KPI Agent: Financial Key Performance Indicator extraction and reasoning.
 
-Uses:
-- Qwen2.5-7B-Instruct for numerical reasoning
-- Python REPL tool for executing calculations (MANDATORY)
-- FinQA dataset patterns for multi-step reasoning
+Regex-based extraction (not an LLM) for 8 KPI types: revenue, gross_margin,
+operating_income, net_income, eps, ebitda, roa, roe. "revenue" is also
+backed by FinancialNERAgent's fine-tuned model when available (see
+REVENUE_XBRL_TAGS) - every other type is regex-only, since FiNER-139 has
+no ground truth for them.
 
 Performs:
-- KPI identification (revenue, margin, EPS, etc.)
-- Multi-step numerical reasoning using Python
-- Ratio calculations and comparisons
-- Year-over-year analysis
+- KPI identification via KPI_KEYWORDS regex patterns
+- Derived calculations (e.g. gross margin % from gross profit / revenue)
 
 Input: GraphState with document, chunks populated
 Output: GraphState with kpi_results populated
@@ -36,6 +35,19 @@ KPI_KEYWORDS = {
     "ebitda": r"(ebitda|operating\s+cash\s+flow)",
     "roa": r"(return\s+on\s+assets|ROA)",
     "roe": r"(return\s+on\s+equity|ROE)",
+}
+
+# FiNER-139 XBRL tags that correspond to "revenue" - the only KPI_KEYWORDS
+# category with any matching tag in that dataset's 139-tag vocabulary. There
+# is no FiNER-139 tag for gross margin, operating income, net income, EPS,
+# EBITDA, ROA, or ROE - those stay regex-only, permanently, not as a gap to
+# fill in later. See src/agents/financial_ner_agent.py's module docstring.
+REVENUE_XBRL_TAGS = {
+    "Revenues",
+    "RevenueFromContractWithCustomerExcludingAssessedTax",
+    "RevenueFromContractWithCustomerIncludingAssessedTax",
+    "RevenueFromRelatedParties",
+    "RevenueRemainingPerformanceObligation",
 }
 
 
@@ -66,6 +78,11 @@ class KPIAgent:
 
         # Extract KPI patterns from text
         extracted_kpis = self._extract_kpi_patterns(document.cleaned_text)
+
+        # Prefer the fine-tuned financial-entity model's revenue figure, when
+        # available, over the regex match - it's the only KPI type FiNER-139
+        # actually has ground truth for. Every other KPI type stays regex-only.
+        self._apply_financial_entities(extracted_kpis, state.get("financial_entities") or [])
 
         # Perform calculations if needed
         calculated_kpis = self._perform_calculations(extracted_kpis)
@@ -119,6 +136,7 @@ class KPIAgent:
                         "value": numeric_value,
                         "unit": unit,
                         "raw_text": match.group(0),
+                        "source": "regex",
                     })
                 except ValueError:
                     pass
@@ -127,6 +145,42 @@ class KPIAgent:
                 kpis[kpi_type] = kpi_entries
 
         return kpis
+
+    def _apply_financial_entities(
+        self,
+        extracted_kpis: dict[str, list[dict[str, Any]]],
+        financial_entities: list[dict[str, Any]],
+    ) -> None:
+        """
+        Prefer the fine-tuned financial-entity model's revenue figure, when
+        available, over the regex match. Mutates extracted_kpis in place.
+
+        FiNER-139 has no tag for any other KPI_KEYWORDS category (gross
+        margin, operating income, net income, EPS, EBITDA, ROA, ROE) - this
+        intentionally only ever touches "revenue". See REVENUE_XBRL_TAGS.
+
+        Args:
+            extracted_kpis: Regex-derived KPIs, mutated in place
+            financial_entities: Raw tagged spans from FinancialNERAgent
+        """
+        revenue_candidates = [
+            entity
+            for entity in financial_entities
+            if entity.get("tag") in REVENUE_XBRL_TAGS and entity.get("value") is not None
+        ]
+
+        if not revenue_candidates:
+            return
+
+        best = max(revenue_candidates, key=lambda entity: entity.get("score", 0.0))
+
+        extracted_kpis["revenue"] = [{
+            "name": best["tag"],
+            "value": best["value"],
+            "unit": "",
+            "raw_text": best.get("text", ""),
+            "source": "financial_ner_model",
+        }]
 
     def _perform_calculations(
         self, extracted_kpis: dict[str, list[dict[str, Any]]]

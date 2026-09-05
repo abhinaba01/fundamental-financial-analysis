@@ -3,14 +3,17 @@ Graph Builder: LangGraph StateGraph assembly.
 
 Orchestrates the complete analysis pipeline:
 1. Input: ParsedDocument + query
-2. Sequential agents: NER → Sentiment → KPI → RAG
+2. Sequential agents: NER → Sentiment → Financial NER → KPI → RAG
 3. Conditional: Re-query if retrieval low confidence
 4. Output: Final report with all agent results
 
 Architecture:
-- NER Agent: Entity extraction
+- NER Agent: General entity extraction (ORG/PER/LOC/MISC)
 - Sentiment Agent: Sentiment analysis with tone
-- KPI Agent: Financial metric extraction
+- Financial NER Agent: XBRL financial-figure tagging (fine-tuned model,
+  empty until trained - see src/agents/financial_ner_agent.py)
+- KPI Agent: Financial metric extraction (regex, backed by Financial NER
+  for revenue specifically)
 - RAG Agent: Evidence-based synthesis with re-query capability
 - Synthesis Agent: Report assembly
 
@@ -32,6 +35,7 @@ from src.graph.edges import (
 )
 from src.agents.ner_agent import NERAgent
 from src.agents.sentiment_agent import SentimentAgent
+from src.agents.financial_ner_agent import FinancialNERAgent
 from src.agents.kpi_agent import KPIAgent
 from src.agents.rag_agent import RAGAgent
 from src.agents.synthesis_agent import SynthesisAgent
@@ -48,6 +52,7 @@ class AnalysisPipelineBuilder:
         embedding_pipeline=None,
         ner_agent=None,
         sentiment_agent=None,
+        financial_ner_agent=None,
         kpi_agent=None,
         rag_agent=None,
         synthesis_agent=None,
@@ -60,6 +65,7 @@ class AnalysisPipelineBuilder:
             embedding_pipeline: EmbeddingPipeline for RAG retrieval
             ner_agent: NERAgent instance (created if None)
             sentiment_agent: SentimentAgent instance (created if None)
+            financial_ner_agent: FinancialNERAgent instance (created if None)
             kpi_agent: KPIAgent instance (created if None)
             rag_agent: RAGAgent instance (created if None)
             synthesis_agent: SynthesisAgent instance (created if None)
@@ -72,6 +78,7 @@ class AnalysisPipelineBuilder:
         # Initialize agents (use provided or create new)
         self.ner_agent = ner_agent or NERAgent(device=device)
         self.sentiment_agent = sentiment_agent or SentimentAgent(device=device)
+        self.financial_ner_agent = financial_ner_agent or FinancialNERAgent(device=device)
         self.kpi_agent = kpi_agent or KPIAgent()
         self.rag_agent = rag_agent or RAGAgent(embedding_pipeline=embedding_pipeline)
         self.synthesis_agent = synthesis_agent or SynthesisAgent()
@@ -93,6 +100,7 @@ class AnalysisPipelineBuilder:
         # Add all nodes
         graph.add_node("ner", self.ner_agent)
         graph.add_node("sentiment", self.sentiment_agent)
+        graph.add_node("financial_ner", self.financial_ner_agent)
         graph.add_node("kpi", self.kpi_agent)
         graph.add_node("rag", self.rag_agent)
         graph.add_node("synthesis", self.synthesis_agent)
@@ -102,7 +110,8 @@ class AnalysisPipelineBuilder:
 
         # Add sequential edges (normal progression)
         graph.add_edge("ner", "sentiment")
-        graph.add_edge("sentiment", "kpi")
+        graph.add_edge("sentiment", "financial_ner")
+        graph.add_edge("financial_ner", "kpi")
         graph.add_edge("kpi", "rag")
 
         # Add conditional edge from RAG
