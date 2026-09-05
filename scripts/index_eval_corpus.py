@@ -35,6 +35,15 @@ def main() -> int:
     parser.add_argument("--collection", default="financebench_eval")
     parser.add_argument("--vector-store", default="data/eval_vector_store")
     parser.add_argument("--gpu", action="store_true", help="Embed on CUDA")
+    parser.add_argument(
+        "--embedding-model",
+        default=None,
+        help=(
+            "Embedding model to index with (default: the pipeline's own). Accepts "
+            "a Hub id or a local directory, so a fine-tuned model can be indexed "
+            "into its own collection and compared against the stock one."
+        ),
+    )
     args = parser.parse_args()
 
     path = Path(args.test_set)
@@ -72,10 +81,15 @@ def main() -> int:
         cleaned_text=" ".join(chunk.text for chunk in chunks.values()),
     )
 
+    overrides = {"model_name": args.embedding_model} if args.embedding_model else {}
+    if args.embedding_model:
+        print(f"  model:      {args.embedding_model}")
+
     embedder = EmbeddingPipeline(
         collection_name=args.collection,
         vector_store_path=args.vector_store,
         device="cuda" if args.gpu else "cpu",
+        **overrides,
     )
     embedder.embed_and_index(document)
 

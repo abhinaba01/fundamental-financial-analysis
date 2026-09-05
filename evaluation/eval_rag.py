@@ -309,6 +309,7 @@ def _predict_with_agent(
     samples: list[dict[str, Any]],
     collection: str | None = None,
     vector_store: str | None = None,
+    embedding_model: str | None = None,
 ) -> None:
     """
     Populate each sample's retrieval and generation output by running RAGAgent.
@@ -323,6 +324,10 @@ def _predict_with_agent(
             pipeline's own collection). Point this at a benchmark corpus to
             keep evaluation runs out of the working vector store.
         vector_store: Path to the ChromaDB store holding that collection
+        embedding_model: Embedding model to query with. Must match whatever
+            indexed the collection - querying vectors written by a different
+            model compares embeddings from two unrelated spaces and silently
+            produces meaningless similarities rather than an error.
     """
     from src.agents.rag_agent import RAGAgent
     from src.preprocessing.embedder import EmbeddingPipeline
@@ -332,6 +337,8 @@ def _predict_with_agent(
         overrides["collection_name"] = collection
     if vector_store:
         overrides["vector_store_path"] = vector_store
+    if embedding_model:
+        overrides["model_name"] = embedding_model
 
     try:
         embedder = EmbeddingPipeline(**overrides)
@@ -403,12 +410,25 @@ def main() -> None:
         default=None,
         help="Path to the ChromaDB store holding --collection",
     )
+    parser.add_argument(
+        "--embedding-model",
+        default=None,
+        help=(
+            "Embedding model to query with (Hub id or local path). Must be the "
+            "same model that indexed --collection."
+        ),
+    )
     args = parser.parse_args()
 
     samples = load_samples(args)
 
     if args.run_agent:
-        _predict_with_agent(samples, collection=args.collection, vector_store=args.vector_store)
+        _predict_with_agent(
+            samples,
+            collection=args.collection,
+            vector_store=args.vector_store,
+            embedding_model=args.embedding_model,
+        )
 
     evaluator = RAGEvaluator()
 
