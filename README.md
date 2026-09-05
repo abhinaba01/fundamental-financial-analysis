@@ -441,6 +441,59 @@ cleaner entity spans on messier real-document text (e.g. correctly capturing
 "Apple Inc." as one span instead of splitting it), just not something this
 tiny synthetic sample measures.
 
+### Retrieval fine-tuning: a negative result
+
+Retrieval is the weakest measured link in this pipeline — average chunk
+similarity of 0.593 on the sample filing, under the 0.6 routing bar, so the
+re-query loop fires and generates from thin evidence anyway. The obvious fix is
+to fine-tune the embedder, so I did:
+[`Train_Retrieval_Colab.ipynb`](Train_Retrieval_Colab.ipynb) trains
+`BAAI/bge-large-en-v1.5` on FiQA-2018's train split (14,166 pairs,
+`CachedMultipleNegativesRankingLoss` with GradCache so a 16GB T4 can hold an
+effective batch of 64). Result:
+[`dataisgod/bge-large-fiqa-financial`](https://huggingface.co/dataisgod/bge-large-fiqa-financial).
+
+**In-domain, on FiQA's held-out test split, it worked** — modestly:
+
+| FiQA test | Stock | Fine-tuned | Δ |
+|-----------|------:|-----------:|---:|
+| NDCG@10 | 0.5394 | 0.5516 | **+0.0122** (+2.3%) |
+
+**On this pipeline's actual task it did not.** Re-measured through
+`eval_rag` against the FinanceBench corpus — SEC filing prose rather than
+forum Q&A, so a genuine transfer setting:
+
+| FinanceBench (n=150) | Stock | Fine-tuned | Δ |
+|----------------------|------:|-----------:|---:|
+| Hit@1 | 0.4600 | 0.4067 | **−0.0533** (−11.6%) |
+| MRR | 0.5753 | 0.5543 | −0.0210 (−3.7%) |
+| NDCG | 0.5498 | 0.5352 | −0.0146 (−2.7%) |
+| Hit@5 | 0.7800 | 0.7800 | 0.0000 |
+
+The fine-tune specialized the model toward FiQA's distribution — retail-investor
+forum discussion — and gave back slightly more on filings than it gained on
+forums.
+
+The Hit@5 column is the informative one. It is *identical* while Hit@1 falls
+5.3 points, so the fine-tune did not change which passages reach the top 5; it
+reordered them, and reordered them worse for filing text. That localizes the
+damage to ranking rather than recall, and points at the actual mistake: the
+training data was the wrong genre. The next experiment is in-domain pairs
+(e.g. `virattt/financial-qa-10K`), not more epochs on FiQA.
+
+**The stock model is therefore still what ships.** `MODEL_NAME` in
+`src/preprocessing/embedder.py` is unchanged, because the evidence says the
+fine-tuned model is worse at the job this pipeline does.
+
+Two caveats on reading these numbers. The FiQA figures come from a 20k-passage
+sampled corpus (`EVAL_CORPUS_EXTRA` in the notebook), not FiQA's full 57,638 —
+a smaller haystack scores higher, so **0.5394 is not comparable to the ~0.45
+published for this model on the full corpus**; only the before/after delta is
+valid, since both runs used the same sample and seed. And the generation
+metrics from that FinanceBench run (EM, ROUGE-L, BLEU) were produced without
+`OPENAI_API_KEY`, so they measure the extractive fallback rather than `gpt-4o`
+and are omitted here.
+
 ## Roadmap / Future Work
 
 Where this pipeline currently stands against what the literature achieves on
@@ -463,11 +516,14 @@ numerical reasoning over filings (the FinQA task, where models like Qwen2.5-7B
 reach 80%+) would need a model in the loop with a calculation tool, replacing
 pattern matching for anything beyond direct figure extraction.
 
-**3. Benchmarking on full datasets.** The evaluation harnesses run against
-2-6 sample worked examples. Pointing them at converted Financial PhraseBank
-(finbert reference: ~97% accuracy) and FinanceBench (gpt-4o + BGE reference:
-~75% EM) splits would produce numbers comparable to published results — the
-harnesses already accept these formats, the datasets just aren't vendored here.
+**3. In-domain retrieval fine-tuning.** Fine-tuning the embedder on FiQA
+improved FiQA and *cost* 5.3 points of Hit@1 on filings — see
+[the negative result above](#retrieval-fine-tuning-a-negative-result). The
+diagnosis is genre mismatch, not method: FiQA is forum discussion, this
+pipeline reads SEC prose. The follow-up is training pairs drawn from filings
+(`virattt/financial-qa-10K`, or questions mined against FinanceBench evidence
+with the eval documents held out), re-measured with the same before/after
+harness. Whether that clears the bar is an open question, not a promise.
 
 **4. Config files that actually load.** `configs/*.yaml` currently document
 intent only; thresholds live as constants in `src/graph/edges.py` and
