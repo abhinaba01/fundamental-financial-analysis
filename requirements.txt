@@ -1,4 +1,8 @@
 # Financial Fundamentals Analysis System - Requirements
+#
+# Mirrors the [project] dependencies in pyproject.toml, which is the source of
+# truth. Kept as a file because the Dockerfile and the Colab notebook install
+# from it; `pip install -e ".[dev]"` is the recommended path for local work.
 
 # Core Framework
 langgraph>=0.1.0

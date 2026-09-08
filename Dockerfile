@@ -1,6 +1,7 @@
 # Dockerfile for Financial Fundamentals Analysis System
 
-FROM python:3.12-slim
+# 3.11 matches the highest version exercised by CI (.github/workflows/tests.yml)
+FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1
 ENV PATH="/root/.local/bin:$PATH"

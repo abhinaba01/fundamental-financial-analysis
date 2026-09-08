@@ -305,22 +305,43 @@ def _chunk_identity(chunk: Any) -> dict[str, str]:
     return {"id": " ".join(str(chunk).split()).lower()}
 
 
-def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
+def _predict_with_agent(
+    samples: list[dict[str, Any]],
+    collection: str | None = None,
+    vector_store: str | None = None,
+    embedding_model: str | None = None,
+) -> None:
     """
     Populate each sample's retrieval and generation output by running RAGAgent.
 
     Retrieval runs against the persistent ChromaDB collection, so the corpus
-    must already be indexed (e.g. via ``python -m src.main``). Building the
-    EmbeddingPipeline needs OPENAI_API_KEY.
+    must already be indexed (e.g. via ``python -m src.main``, or
+    ``scripts/index_eval_corpus.py`` for a benchmark corpus).
 
     Args:
         samples: Test-set samples, mutated in place
+        collection: ChromaDB collection to retrieve from (default: the
+            pipeline's own collection). Point this at a benchmark corpus to
+            keep evaluation runs out of the working vector store.
+        vector_store: Path to the ChromaDB store holding that collection
+        embedding_model: Embedding model to query with. Must match whatever
+            indexed the collection - querying vectors written by a different
+            model compares embeddings from two unrelated spaces and silently
+            produces meaningless similarities rather than an error.
     """
     from src.agents.rag_agent import RAGAgent
     from src.preprocessing.embedder import EmbeddingPipeline
 
+    overrides: dict[str, Any] = {}
+    if collection:
+        overrides["collection_name"] = collection
+    if vector_store:
+        overrides["vector_store_path"] = vector_store
+    if embedding_model:
+        overrides["model_name"] = embedding_model
+
     try:
-        embedder = EmbeddingPipeline()
+        embedder = EmbeddingPipeline(**overrides)
     except (ImportError, ValueError) as exc:
         raise SystemExit(
             f"Cannot run the RAG agent: {exc}\n"
@@ -346,6 +367,7 @@ def _predict_with_agent(samples: list[dict[str, Any]]) -> None:
             "retrieved_chunks": [],
             "retrieval_score": 0.0,
             "retry_count": 0,
+            "rag_attempts": 0,
             "ner_results": {},
             "sentiment_results": {},
             "kpi_results": {},
@@ -375,12 +397,39 @@ def main() -> None:
             "vector store (needs OPENAI_API_KEY)"
         ),
     )
+    parser.add_argument(
+        "--collection",
+        default=None,
+        help=(
+            "ChromaDB collection to retrieve from. Use with a benchmark corpus "
+            "indexed by scripts/index_eval_corpus.py so evaluation runs do not "
+            "read from, or write into, the working vector store."
+        ),
+    )
+    parser.add_argument(
+        "--vector-store",
+        default=None,
+        help="Path to the ChromaDB store holding --collection",
+    )
+    parser.add_argument(
+        "--embedding-model",
+        default=None,
+        help=(
+            "Embedding model to query with (Hub id or local path). Must be the "
+            "same model that indexed --collection."
+        ),
+    )
     args = parser.parse_args()
 
     samples = load_samples(args)
 
     if args.run_agent:
-        _predict_with_agent(samples)
+        _predict_with_agent(
+            samples,
+            collection=args.collection,
+            vector_store=args.vector_store,
+            embedding_model=args.embedding_model,
+        )
 
     evaluator = RAGEvaluator()
 

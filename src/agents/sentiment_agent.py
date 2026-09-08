@@ -96,21 +96,24 @@ class SentimentAgent:
 
         self.logger.info("Sentiment and tone models loaded successfully")
 
-    def __call__(self, state: GraphState) -> GraphState:
+    def __call__(self, state: GraphState) -> dict[str, Any]:
         """
         Execute sentiment analysis on the document in the state.
+
+        Runs as a parallel branch, so it returns only the key it owns and
+        treats `state` as read-only - see NERAgent.__call__ for why.
 
         Args:
             state: GraphState with document populated
 
         Returns:
-            Updated GraphState with sentiment_results populated
+            State delta containing sentiment_results
         """
         document = state.get("document")
 
         if not document:
             self.logger.warning("No document in state. Skipping sentiment analysis.")
-            return state
+            return {}
 
         self.logger.info(f"Running sentiment analysis on document: {document.doc_id}")
 
@@ -133,14 +136,12 @@ class SentimentAgent:
             "is_positive": doc_sentiment.get("score", 0.0) > 0.5,
         }
 
-        state["sentiment_results"] = sentiment_results
-
         self.logger.info(
             f"Sentiment analysis complete: {sentiment_results['overall_sentiment']} "
             f"({sentiment_results['overall_score']:.3f})"
         )
 
-        return state
+        return {"sentiment_results": sentiment_results}
 
     def _analyze_document_sentiment(self, text: str) -> dict[str, Any]:
         """

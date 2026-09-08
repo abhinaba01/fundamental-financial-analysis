@@ -1,0 +1,50 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # The default PyPI torch wheel bundles CUDA (~2.5GB) and is useless on a
+      # CPU-only runner. Installing the CPU build first satisfies the torch
+      # requirement before the project's own install resolves it.
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          python -m spacy download en_core_web_sm
+
+      # The suite loads the real NER and sentiment checkpoints (~2.2GB total).
+      # Key on the modules holding the model constants so the cache busts
+      # automatically whenever a model is swapped.
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ hashFiles('src/agents/ner_agent.py', 'src/agents/sentiment_agent.py') }}
+          restore-keys: hf-${{ runner.os }}-
+
+      - name: Run tests
+        run: pytest tests/ -v

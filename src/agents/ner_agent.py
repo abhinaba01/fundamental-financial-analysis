@@ -62,21 +62,28 @@ class NERAgent:
         )
         self.logger.info(f"NER model loaded successfully")
 
-    def __call__(self, state: GraphState) -> GraphState:
+    def __call__(self, state: GraphState) -> dict[str, Any]:
         """
         Execute NER on the document in the state.
+
+        This node runs as one of three parallel branches, so it returns only
+        the key it owns instead of the whole state. Branches that each returned
+        the full state would every one of them write every key in the same
+        superstep, and LangGraph rejects concurrent writes to a key with no
+        reducer. For the same reason it treats `state` as read-only: the dict
+        is shared with the branches running alongside it.
 
         Args:
             state: GraphState with document populated
 
         Returns:
-            Updated GraphState with ner_results populated
+            State delta containing ner_results
         """
         document = state.get("document")
 
         if not document:
             self.logger.warning("No document in state. Skipping NER.")
-            return state
+            return {}
 
         self.logger.info(f"Running NER on document: {document.doc_id}")
 
@@ -89,11 +96,9 @@ class NERAgent:
             "entity_types": self._summarize_entity_types(entities),
         }
 
-        state["ner_results"] = ner_results
-
         self.logger.info(f"NER complete: {len(entities)} entities extracted")
 
-        return state
+        return {"ner_results": ner_results}
 
     def _extract_entities(self, text: str, max_length: int = 512) -> list[dict[str, Any]]:
         """

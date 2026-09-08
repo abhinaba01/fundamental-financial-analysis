@@ -39,9 +39,13 @@ just call the venv's Python directly without activating:
 
 ```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -e ".[dev]"
 python -m spacy download en_core_web_sm
 ```
+
+(`pip install -r requirements.txt` also works and installs the same runtime
+dependencies; the editable install additionally pulls in the test tooling and
+makes `src` importable from anywhere.)
 
 This installs `torch`, `transformers`, `chromadb`, `langgraph`, and friends.
 Expect this to take several minutes and pull a few GB — `torch` alone is
@@ -73,7 +77,7 @@ The repo ships a couple of tiny test documents so you don't need a real
 10-K on hand for a first run.
 
 ```bash
-python -m src.main --document test_small.txt --query "What is the revenue and gross margin?" --output report.json --cpu
+python -m src.main --document data/samples/small_filing.txt --query "What is the revenue and gross margin?" --output report.json --cpu
 ```
 
 **What happens, in order, and roughly how long each stage takes on CPU:**
@@ -87,10 +91,12 @@ python -m src.main --document test_small.txt --query "What is the revenue and gr
    on a first run**: the model itself is ~1.3GB and downloads once, then
    gets cached in `~/.cache/huggingface/hub/`. Budget 3-5 minutes the very
    first time; seconds on every run after
-5. **Run the analysis graph**: NER (`dslim/bert-base-NER`), sentiment
-   (`ProsusAI/finbert`), KPI extraction (regex-based, no model), then RAG
-   (retrieval + generation). NER and sentiment models are smaller and
-   download in under a minute the first time
+5. **Run the analysis graph**: NER (`dslim/bert-large-NER`), sentiment
+   (`ProsusAI/finbert`) and KPI extraction (regex-based, no model) run
+   concurrently as parallel branches, then fan in to retrieval, an optional
+   re-query loop, and `gpt-4o` generation. NER and sentiment models are
+   smaller than the embedding model and download in under a minute the
+   first time
 6. **Synthesize** everything into a JSON report
 
 A cold run (nothing cached yet) takes on the order of 5-8 minutes, almost
@@ -106,7 +112,7 @@ chain-of-thought if you set an API key), and a `summary` string.
 Point `--document` at any `.pdf`, `.txt`, `.html`, or `.json` file:
 
 ```bash
-python -m src.main --document AAPL_10K.pdf --query "What are the primary risk factors?" --output aapl_report.json --cpu
+python -m src.main --document data/samples/AAPL_10K.pdf --query "What are the primary risk factors?" --output aapl_report.json --cpu
 ```
 
 PDFs take noticeably longer to parse than text — `pdfplumber` extracts text
@@ -127,7 +133,7 @@ Then, from another terminal:
 curl -X POST "http://127.0.0.1:8000/analyze" \
   -F "query=What are the key risks?" \
   -F "use_gpu=false" \
-  -F "document=@test_small.txt"
+  -F "document=@data/samples/small_filing.txt"
 ```
 
 The response is the same JSON structure as the CLI's `report.json`.
@@ -138,9 +144,11 @@ The response is the same JSON structure as the CLI's `report.json`.
 pytest tests/ -v
 ```
 
-Should show `19 passed`. The first run loads the NER and sentiment models
-(same one-time download cost as step 5), so it isn't instant, but it
-doesn't touch the embedding model or ChromaDB.
+Should show `40 passed` — 28 pipeline tests plus 12 for the HTTP API. The
+first run loads the NER and sentiment models (same one-time download cost as
+step 5), so it isn't instant, but it doesn't touch the embedding model or
+ChromaDB. The API tests monkeypatch the pipeline, so they load no models
+at all.
 
 ## 9. Run the evaluation harnesses
 
@@ -153,6 +161,20 @@ python -m evaluation.eval_sentiment --test-set data/eval/sentiment_example.json
 python -m evaluation.eval_kpi --test-set data/eval/kpi_example.json
 python -m evaluation.eval_rag --test-set data/eval/rag_example.json
 ```
+
+Those are sanity checks, not benchmarks. For real numbers, download and convert
+the actual datasets first:
+
+```bash
+pip install -e ".[eval]"
+python scripts/prepare_eval_datasets.py --all
+python -m evaluation.eval_sentiment --test-set data/eval/phrasebank_test.json --run-agent
+```
+
+Budget a few minutes for the sentiment run (2,264 sentences, unbatched on CPU).
+The RAG benchmark needs its corpus embedded first via
+`scripts/index_eval_corpus.py`, which takes ~12 minutes on CPU — the evidence
+passages are long and BGE-large is a 335M-parameter model.
 
 Add `--run-agent` to NER/sentiment/KPI to score live model output instead of
 the hand-written predictions baked into those example files (see

@@ -1,0 +1,44 @@
+{
+  "accuracy": 0.9717314487632509,
+  "macro_f1": 0.962503461452302,
+  "weighted_f1": 0.9720392191964458,
+  "per_class_metrics": {
+    "negative": {
+      "precision": 0.9057750759878419,
+      "recall": 0.9834983498349835,
+      "f1_score": 0.9430379746835442,
+      "count": 303
+    },
+    "neutral": {
+      "precision": 0.9985152190051967,
+      "recall": 0.9669302659956865,
+      "f1_score": 0.9824689554419282,
+      "count": 1391
+    },
+    "positive": {
+      "precision": 0.9472789115646258,
+      "recall": 0.9771929824561404,
+      "f1_score": 0.9620034542314335,
+      "count": 570
+    }
+  },
+  "confusion_matrix": {
+    "negative": {
+      "negative": 298,
+      "neutral": 1,
+      "positive": 4
+    },
+    "neutral": {
+      "negative": 19,
+      "neutral": 1345,
+      "positive": 27
+    },
+    "positive": {
+      "negative": 12,
+      "neutral": 1,
+      "positive": 557
+    }
+  },
+  "total_samples": 2264,
+  "samples_evaluated": 2264
+}
