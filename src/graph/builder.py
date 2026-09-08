@@ -35,6 +35,7 @@ from src.graph.state import GraphState
 from src.graph.edges import should_retrieve_again
 from src.agents.ner_agent import NERAgent
 from src.agents.sentiment_agent import SentimentAgent
+from src.agents.financial_ner_agent import FinancialNERAgent
 from src.agents.kpi_agent import KPIAgent
 from src.agents.rag_agent import RAGAgent
 from src.agents.synthesis_agent import SynthesisAgent
@@ -54,6 +55,7 @@ class AnalysisPipelineBuilder:
         embedding_pipeline=None,
         ner_agent=None,
         sentiment_agent=None,
+        financial_ner_agent=None,
         kpi_agent=None,
         rag_agent=None,
         synthesis_agent=None,
@@ -66,6 +68,7 @@ class AnalysisPipelineBuilder:
             embedding_pipeline: EmbeddingPipeline for RAG retrieval
             ner_agent: NERAgent instance (created if None)
             sentiment_agent: SentimentAgent instance (created if None)
+            financial_ner_agent: FinancialNERAgent instance (created if None)
             kpi_agent: KPIAgent instance (created if None)
             rag_agent: RAGAgent instance (created if None)
             synthesis_agent: SynthesisAgent instance (created if None)
@@ -78,6 +81,7 @@ class AnalysisPipelineBuilder:
         # Initialize agents (use provided or create new)
         self.ner_agent = ner_agent or NERAgent(device=device)
         self.sentiment_agent = sentiment_agent or SentimentAgent(device=device)
+        self.financial_ner_agent = financial_ner_agent or FinancialNERAgent(device=device)
         self.kpi_agent = kpi_agent or KPIAgent()
         self.rag_agent = rag_agent or RAGAgent(embedding_pipeline=embedding_pipeline)
         self.synthesis_agent = synthesis_agent or SynthesisAgent()
@@ -97,6 +101,7 @@ class AnalysisPipelineBuilder:
 
         graph.add_node("ner", self.ner_agent)
         graph.add_node("sentiment", self.sentiment_agent)
+        graph.add_node("financial_ner", self.financial_ner_agent)
         graph.add_node("kpi", self.kpi_agent)
         graph.add_node("retrieve", self.rag_agent.retrieve)
         graph.add_node("generate", self.rag_agent.generate)

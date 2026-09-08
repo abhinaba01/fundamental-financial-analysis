@@ -25,6 +25,7 @@ from src.graph.state import GraphState
 from src.agents.ner_agent import NERAgent
 from src.agents.sentiment_agent import SentimentAgent
 from src.agents.kpi_agent import KPIAgent
+from src.agents.financial_ner_agent import FinancialNERAgent
 from src.agents.rag_agent import RAGAgent
 from src.agents.synthesis_agent import SynthesisAgent
 
@@ -88,6 +89,7 @@ def test_graph_state_structure():
         "ner_results": {},
         "sentiment_results": {},
         "kpi_results": {},
+        "financial_entities": [],
         "cot_reasoning": "",
         "final_answer": "",
         "report": {},
@@ -117,6 +119,7 @@ def test_synthesis_agent_formatting():
         "ner_results": {"total_entities": 5, "entity_types": {"ORG": 3}},
         "sentiment_results": {"overall_sentiment": "positive", "overall_score": 0.8},
         "kpi_results": {"total_kpis": 3, "extracted_kpis": {"revenue": 1000}},
+        "financial_entities": [],
         "cot_reasoning": "Step 1: Analyze data...",
         "final_answer": "The revenue is 1000",
         "report": {},
@@ -147,6 +150,7 @@ def _routing_state(**overrides) -> GraphState:
         "ner_results": {},
         "sentiment_results": {},
         "kpi_results": {},
+        "financial_entities": [],
         "cot_reasoning": "",
         "final_answer": "",
         "report": {},
